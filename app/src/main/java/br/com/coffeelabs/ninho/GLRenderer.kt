@@ -1,6 +1,5 @@
 package br.com.coffeelabs.ninho
 
-import android.graphics.Bitmap
 import android.opengl.GLES30
 import android.opengl.GLSurfaceView
 import android.opengl.GLUtils
@@ -45,8 +44,8 @@ class Scene {
     var time = 0f
     var lookX = 0f
     var lookY = 0f
-    var bg: Bitmap? = null
-    var bgVersion = 0
+    /** deslocamento de paralaxe, em fração da largura da tela */
+    var parallax = 0f
 
     companion object { const val N = 72 }
 }
@@ -69,7 +68,7 @@ class MsaaChooser : GLSurfaceView.EGLConfigChooser {
     }
 }
 
-class GLRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
+class GLRenderer(private val scene: Scene, private val assets: android.content.res.AssetManager) : GLSurfaceView.Renderer {
     private val mesh = Mesh()
     private val builder = RyuBuilder()
     private var prog = 0
@@ -81,8 +80,8 @@ class GLRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private val quadVbo = IntArray(1)
     private val shadowFbo = IntArray(1)
     private val shadowTex = IntArray(1)
-    private val bgTex = IntArray(1)
-    private var bgVersionLoaded = -1
+    private val bgTex = IntArray(4)
+    private val lr = FloatArray(4)
     private var vBuf: FloatBuffer = newFloats(Mesh.STRIDE * 30000)
     private var iBuf: IntBuffer = newInts(180000)
     private val pondVbo = IntArray(1)
@@ -128,7 +127,6 @@ class GLRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         uni.clear()
-        bgVersionLoaded = -1
         prog = link(Shaders.VS, Shaders.FS)
         depthProg = link(Shaders.DEPTH_VS, Shaders.DEPTH_FS)
         bgProg = link(Shaders.BG_VS, Shaders.BG_FS)
@@ -156,7 +154,7 @@ class GLRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         val wb = newFloats(wm.vn); wb.put(wm.v, 0, wm.vn); wb.position(0)
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, waterVbo[0])
         GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, wm.vn * 4, wb, GLES30.GL_STATIC_DRAW)
-        val qb = newFloats(12); qb.put(floatArrayOf(-1f, -1f, 1f, -1f, 1f, 1f, -1f, -1f, 1f, 1f, -1f, 1f)); qb.position(0)
+        val qb = newFloats(12); qb.put(floatArrayOf(0f, 0f, 1f, 0f, 1f, 1f, 0f, 0f, 1f, 1f, 0f, 1f)); qb.position(0)
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, quadVbo[0])
         GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, 48, qb, GLES30.GL_STATIC_DRAW)
         // mapa de sombras
@@ -175,12 +173,18 @@ class GLRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES30.glDrawBuffers(1, intArrayOf(GLES30.GL_NONE), 0)
         GLES30.glReadBuffer(GLES30.GL_NONE)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-        GLES30.glGenTextures(1, bgTex, 0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, bgTex[0])
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        // camadas do cenário (recortes da sprite sheet)
+        GLES30.glGenTextures(4, bgTex, 0)
+        val bmps = Backdrop.load(assets)
+        for (i in 0 until 4) {
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, bgTex[i])
+            GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, bmps[i], 0)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, if (i == Backdrop.WATER) GLES30.GL_REPEAT else GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+            bmps[i].recycle()
+        }
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -201,7 +205,7 @@ class GLRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         var dragon: Boolean; var egg: Boolean; var pearl: Boolean
         var shape: RyuShape; var eggWobble: Float; var eggCrack: Float; var eggGlow: Float
         var pearlPos: V3; var night: Float; var time: Float; var lookX: Float; var lookY: Float
-        var bg: Bitmap?; var bgVersion: Int
+        var par: Float
         synchronized(scene.lock) {
             System.arraycopy(scene.spine, 0, spine, 0, spine.size)
             dragon = scene.dragon; egg = scene.egg; pearl = scene.pearl; shape = scene.shape
@@ -209,14 +213,7 @@ class GLRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             pose.headF = scene.pose.headF; pose.headU = scene.pose.headU; pose.paddle = scene.pose.paddle; pose.nod = scene.pose.nod
             eggWobble = scene.eggWobble; eggCrack = scene.eggCrack; eggGlow = scene.eggGlow
             pearlPos = scene.pearlPos; night = scene.night; time = scene.time; lookX = scene.lookX; lookY = scene.lookY
-            bg = scene.bg; bgVersion = scene.bgVersion
-        }
-        // fundo
-        val b = bg
-        if (b != null && bgVersion != bgVersionLoaded && !b.isRecycled) {
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, bgTex[0])
-            GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, b, 0)
-            bgVersionLoaded = bgVersion
+            par = scene.parallax
         }
         // malha
         mesh.reset()
@@ -258,19 +255,37 @@ class GLRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES30.glViewport(0, 0, w, h)
         GLES30.glClearColor(0.74f, 0.82f, 0.92f, 1f)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
-        if (bgVersionLoaded >= 0) {
-            GLES30.glDisable(GLES30.GL_DEPTH_TEST)
-            GLES30.glUseProgram(bgProg)
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, bgTex[0])
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(bgProg, "uTex"), 0)
-            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, quadVbo[0])
-            GLES30.glEnableVertexAttribArray(0)
-            GLES30.glVertexAttribPointer(0, 2, GLES30.GL_FLOAT, false, 8, 0)
-            GLES30.glDisableVertexAttribArray(1); GLES30.glDisableVertexAttribArray(2); GLES30.glDisableVertexAttribArray(3)
-            GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 6)
-            GLES30.glEnable(GLES30.GL_DEPTH_TEST)
-        }
+        val tr = lerp(1f, 0.30f, night); val tg = lerp(1f, 0.37f, night); val tb = lerp(1f, 0.68f, night)
+        val wf = w.toFloat(); val hf = h.toFloat()
+        val pp = par * wf
+        val shore = hf * Backdrop.SHORE
+        GLES30.glDisable(GLES30.GL_DEPTH_TEST)
+        GLES30.glEnable(GLES30.GL_BLEND)
+        GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+        GLES30.glUseProgram(bgProg)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(bgProg, "uTex"), 0)
+        GLES30.glUniform3f(GLES30.glGetUniformLocation(bgProg, "uTint"), tr, tg, tb)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, quadVbo[0])
+        GLES30.glEnableVertexAttribArray(0)
+        GLES30.glVertexAttribPointer(0, 2, GLES30.GL_FLOAT, false, 8, 0)
+        GLES30.glDisableVertexAttribArray(1); GLES30.glDisableVertexAttribArray(2); GLES30.glDisableVertexAttribArray(3)
+        // céu + Fuji (o céu acima da faixa é a 1ª linha esticada)
+        Backdrop.rect(Backdrop.FAR, wf, hf, pp, lr)
+        val fx = lr[0]; val fy = lr[1]; val fw = lr[2]; val fh = lr[3]
+        layer(Backdrop.FAR, fx, 0f, fx + fw, fy + 1f, 0f, 0.004f, 1f, 0.004f, 1f)
+        layer(Backdrop.FAR, fx, fy, fx + fw, fy + fh, 0f, 0f, 1f, 1f, 1f)
+        // reflexos espelhados na linha da margem
+        val vs = ((shore - fy) / fh).coerceIn(0f, 1f)
+        layer(Backdrop.FAR, fx, shore, fx + fw, shore + (shore - fy) * 0.9f, 0f, vs, 1f, 0f, 1f)
+        Backdrop.rect(Backdrop.MID, wf, hf, pp, lr)
+        val mx = lr[0]; val my = lr[1]; val mw = lr[2]; val mh = lr[3]
+        layer(Backdrop.MID, mx, shore, mx + mw, shore + mh * 0.9f, 0f, 1f, 1f, 0f, 1f)
+        // água por cima dos reflexos (deixa-os azulados e com brilhos), deslizando devagar
+        val u0 = -pp * Backdrop.PAR_WATER / wf + time * 0.006f
+        layer(Backdrop.WATER, 0f, shore, wf, hf, u0, 0f, u0 + 1.25f, 1f, 0.58f)
+        layer(Backdrop.MID, mx, my, mx + mw, my + mh, 0f, 0f, 1f, 1f, 1f)
+        GLES30.glEnable(GLES30.GL_DEPTH_TEST)
 
         GLES30.glUseProgram(prog)
         GLES30.glUniformMatrix4fv(u("uVP"), 1, false, vp, 0)
@@ -282,10 +297,12 @@ class GLRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         set3("uEye", Cam.EYE.x, Cam.EYE.y, Cam.EYE.z)
         GLES30.glUniform2f(u("uLook"), lookX, lookY)
         val pale = shape.pale
-        set3("uBelly", lerp(0.933f, 1f, pale), lerp(0.929f, 1f, pale), lerp(0.902f, 1f, pale))
-        set3("uLid", lerp(0.788f, 1f, pale), lerp(0.816f, 1f, pale), lerp(0.859f, 1f, pale))
+        val bel = RyuBuilder.BELLY.lerp(V3(1f, 1f, 1f), pale * 0.8f)
+        val lid = RyuBuilder.BODY.lerp(RyuBuilder.SILVER, pale)
+        set3("uBelly", bel.x, bel.y, bel.z)
+        set3("uLid", lid.x, lid.y, lid.z)
         set1("uScaleK", 54f * shape.L / 3.3f)
-        set1("uBankPx", h * 0.108f)
+        set1("uBankPx", h * 0.1f)
         set1("uTime", time)
         set1("uWaterY", RyuBuilder.WATER_Y)
         set1("uMirror", 0f)
@@ -310,6 +327,30 @@ class GLRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES30.glDisable(GLES30.GL_BLEND)
         // cena
         drawGeometry()
+
+        // margem em primeiro plano (a camada que mais se move na paralaxe)
+        GLES30.glDisable(GLES30.GL_DEPTH_TEST)
+        GLES30.glEnable(GLES30.GL_BLEND)
+        GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+        GLES30.glUseProgram(bgProg)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, quadVbo[0])
+        GLES30.glEnableVertexAttribArray(0)
+        GLES30.glVertexAttribPointer(0, 2, GLES30.GL_FLOAT, false, 8, 0)
+        GLES30.glDisableVertexAttribArray(1); GLES30.glDisableVertexAttribArray(2); GLES30.glDisableVertexAttribArray(3)
+        Backdrop.rect(Backdrop.FG, wf, hf, pp, lr)
+        layer(Backdrop.FG, lr[0], lr[1], lr[0] + lr[2], lr[1] + lr[3], 0f, 0f, 1f, 1f, 1f)
+        GLES30.glDisable(GLES30.GL_BLEND)
+        GLES30.glEnable(GLES30.GL_DEPTH_TEST)
+    }
+
+    /** Desenha uma camada 2D: retângulo em pixels (origem no topo) e recorte de textura. */
+    private fun layer(tex: Int, x0: Float, y0: Float, x1: Float, y1: Float, u0: Float, v0: Float, u1: Float, v1: Float, alpha: Float) {
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, bgTex[tex])
+        GLES30.glUniform4f(GLES30.glGetUniformLocation(bgProg, "uRect"), x0 / w * 2f - 1f, 1f - y0 / h * 2f, x1 / w * 2f - 1f, 1f - y1 / h * 2f)
+        GLES30.glUniform4f(GLES30.glGetUniformLocation(bgProg, "uUv"), u0, v0, u1, v1)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(bgProg, "uAlpha"), alpha)
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 6)
     }
 
     /** Desenha o lago (estático) e a malha dinâmica com o programa atual. */

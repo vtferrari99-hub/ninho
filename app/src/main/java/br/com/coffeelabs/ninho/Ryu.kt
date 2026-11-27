@@ -21,11 +21,11 @@ class RyuShape(
 
     companion object {
         fun of(s: Stage): RyuShape = when (s) {
-            Stage.EGG, Stage.BABY -> RyuShape(1.35f, 0.19f, 0.64f, 1.45f, 0.30f, 0.45f, 0.55f, 0.9f)
-            Stage.CHILD -> RyuShape(2.0f, 0.19f, 0.64f, 1.28f, 0.55f, 0.65f, 0.75f)
-            Stage.TEEN -> RyuShape(2.7f, 0.195f, 0.65f, 1.12f, 0.80f, 0.85f, 0.9f)
+            Stage.EGG, Stage.BABY -> RyuShape(1.35f, 0.19f, 0.64f, 1.45f, 0.30f, 0.45f, 0.55f, 0.9f, 0f, 0.6f)
+            Stage.CHILD -> RyuShape(2.0f, 0.19f, 0.64f, 1.28f, 0.55f, 0.65f, 0.75f, 1f, 0f, 0.45f)
+            Stage.TEEN -> RyuShape(2.7f, 0.195f, 0.65f, 1.12f, 0.80f, 0.85f, 0.9f, 1f, 0f, 0.22f)
             Stage.ADULT -> RyuShape(3.3f, 0.205f, 0.66f, 1.0f, 1.0f, 1.0f, 1.0f)
-            Stage.ELDER -> RyuShape(3.5f, 0.205f, 0.68f, 0.93f, 1.25f, 1.5f, 1.15f, 1f, 1f, 0.25f)
+            Stage.ELDER -> RyuShape(3.5f, 0.205f, 0.68f, 0.93f, 1.25f, 1.5f, 1.15f, 1f, 1f, 0.85f)
         }
     }
 }
@@ -44,14 +44,14 @@ class RyuPose {
 
 class RyuBuilder {
     private val white = V3(1f, 1f, 1f)
-    private val baseBody = V3.rgb("#C9D0DB")
-    private val baseBelly = V3.rgb("#EEEDE6")
-    private val baseCrest = V3.rgb("#A9BEDD")
-    private val baseMane = V3.rgb("#EEF2F7")
-    private val baseHorn = V3.rgb("#F1E9DA")
-    private val baseNose = V3.rgb("#B4BDCB")
+    private val baseBody = BODY
+    private val baseBelly = BELLY
+    private val baseCrest = V3.rgb("#3E4656")
+    private val baseMane = V3.rgb("#454C5A")
+    private val baseHorn = V3.rgb("#8F887C")
+    private val baseNose = V3.rgb("#444B58")
     private val mouth = V3.rgb("#E3A2AE")
-    private val baseBrow = V3.rgb("#DDE3EC")
+    private val baseBrow = V3.rgb("#6C7482")
     private val dark = V3.rgb("#4A5568")
 
     private var radii = FloatArray(96)
@@ -78,11 +78,12 @@ class RyuBuilder {
     /** spine: n pontos (cabeça → cauda) intercalados x,y,z. */
     fun build(m: Mesh, spine: FloatArray, n: Int, st: RyuShape, p: RyuPose) {
         val pale = st.pale
-        val body = baseBody.lerp(white, pale)
-        val belly = baseBelly.lerp(white, pale)
-        val crest = baseCrest.lerp(white, pale)
-        val mane = baseMane.lerp(white, pale)
-        val horn = baseHorn.lerp(white, pale)
+        val body = baseBody.lerp(SILVER, pale)
+        val belly = baseBelly.lerp(white, pale * 0.8f)
+        val crest = baseCrest.lerp(V3.rgb("#B9C6DA"), pale)
+        val mane = baseMane.lerp(V3.rgb("#EEF2F7"), pale)
+        val horn = baseHorn.lerp(V3.rgb("#C9C2B6"), pale * 0.6f)
+        val claw = V3.rgb("#D9D4CA")
         val R = st.R
         if (radii.size < n) { radii = FloatArray(n); bodyN = FloatArray(n * 3); bodyT = FloatArray(n * 3) }
         for (k in 0 until n) radii[k] = R * profile(k / (n - 1f))
@@ -130,7 +131,7 @@ class RyuBuilder {
                     val fwd = (Tk * -1f + N * -0.4f).norm()
                     for (c in -1..1) {
                         val cd = (fwd + S * (0.45f * c)).norm()
-                        m.cone(foot + cd * (0.3f * ls), cd, 0.45f * ls, 0.1f * ls, horn, 0f, 8, 0.6f, N * -0.4f)
+                        m.cone(foot + cd * (0.3f * ls), cd, 0.45f * ls, 0.1f * ls, claw, 0f, 8, 0.6f, N * -0.4f)
                     }
                     m.cone(knee, (Tk + S * 0.6f + N * 0.3f).norm(), 1.0f * ls * st.mane, 0.3f * ls, mane, 0f, 10, 0.8f, N * 0.25f)
                 }
@@ -157,7 +158,7 @@ class RyuBuilder {
         val fr0 = Frame(o, F, p.headU, hs)
         // aceno da cabeça (carinho)
         val fr = if (abs(p.nod) > 0.001f) Frame(o, fr0.d(cos(p.nod), sin(p.nod), 0f), fr0.d(-sin(p.nod), cos(p.nod), 0f), hs) else fr0
-        val brow = baseBrow
+        val brow = baseBrow.lerp(SILVER, st.pale)
         m.ellipsoid(fr, 0f, 0.08f, 0f, 0.5f, 0.46f, 0.44f, body, 0f)
         m.ellipsoid(fr, 0.48f, -0.08f, 0f, 0.46f, 0.23f, 0.26f, body, 0f)
         m.ellipsoid(fr, 0.88f, -0.01f, 0f, 0.12f, 0.13f, 0.17f, body.lerp(baseNose, 0.5f), 0f, 20, 14)
@@ -344,6 +345,9 @@ class RyuBuilder {
 
     companion object {
         const val WATER_Y = -1.2f
+        val BODY = V3.rgb("#59606D")
+        val BELLY = V3.rgb("#B4B9C2")
+        val SILVER = V3.rgb("#D3D9E2")
         val NEST = V3(0f, WATER_Y + 0.02f, 0.6f)
     }
 }

@@ -4,6 +4,10 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.opengl.GLSurfaceView
 import android.os.Build
 import android.os.Bundle
@@ -15,7 +19,7 @@ import android.view.WindowInsetsController
 import android.widget.EditText
 import android.widget.FrameLayout
 
-class MainActivity : Activity(), GameView.Host {
+class MainActivity : Activity(), GameView.Host, SensorEventListener {
 
     private lateinit var st: DragonState
     private lateinit var game: GameView
@@ -28,7 +32,7 @@ class MainActivity : Activity(), GameView.Host {
         gl = GLSurfaceView(this).apply {
             setEGLContextClientVersion(3)
             setEGLConfigChooser(MsaaChooser())
-            setRenderer(GLRenderer(scene))
+            setRenderer(GLRenderer(scene, assets))
             renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
         }
         game = GameView(this, st, this, scene)
@@ -80,15 +84,21 @@ class MainActivity : Activity(), GameView.Host {
     override fun onResume() {
         super.onResume()
         gl.onResume()
+        val sm = getSystemService(SensorManager::class.java)
+        sm?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
         game.resume()
     }
 
     override fun onPause() {
+        getSystemService(SensorManager::class.java)?.unregisterListener(this)
         game.pause()
         gl.onPause()
         st.save(this)
         super.onPause()
     }
+
+    override fun onSensorChanged(e: SensorEvent) { game.setTilt(e.values[0]) }
+    override fun onAccuracyChanged(s: Sensor?, a: Int) {}
 
     override fun saveState() {
         st.save(this)

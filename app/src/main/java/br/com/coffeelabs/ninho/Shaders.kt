@@ -120,7 +120,7 @@ void main() {
         vec3 sclera = vec3(0.95, 0.96, 0.97);
         vec2 ic = uLook * 0.22;
         float di = length(q - ic);
-        vec3 iris = mix(vec3(0.25, 0.47, 0.80), vec3(0.62, 0.82, 0.97), smoothstep(-0.6, 0.5, q.y - ic.y));
+        vec3 iris = mix(vec3(0.16, 0.50, 0.92), vec3(0.55, 0.88, 1.0), smoothstep(-0.6, 0.5, q.y - ic.y));
         float rays = 0.5 + 0.5 * sin(atan(q.y - ic.y, q.x - ic.x) * 26.0);
         iris *= 0.92 + 0.12 * rays * smoothstep(0.3, 0.7, di);
         vec3 c = sclera;
@@ -148,18 +148,25 @@ void main() {
     } else if (mat > 3.5 && mat < 4.5) {
         float fr = 1.0 - max(dot(n, v), 0.0);
         vec3 iri = 0.5 + 0.5 * cos(6.2831 * (fr * 1.2 + vec3(0.0, 0.33, 0.67)) + uTime * 0.6);
-        col = mix(vec3(0.97, 0.96, 0.94), iri * 0.4 + 0.6, 0.45 * fr + 0.15);
-        spec = 0.9; shin = 60.0; wrap = 0.6;
+        col = mix(vec3(0.55, 0.85, 1.0), iri * 0.3 + 0.7, 0.35 * fr);
+        col += vec3(0.25, 0.45, 0.6) * (0.6 + 0.4 * sin(uTime * 3.0)) + vec3(0.5) * pow(fr, 2.0);
+        spec = 0.9; shin = 60.0; wrap = 0.9;
     } else if (mat > 4.5 && mat < 5.5) {
         vec3 lp = vExt.xyz;
-        col = vec3(0.86, 0.88, 0.92);
-        float sp = noise3(lp * 6.5 + 3.1);
-        col = mix(col, vec3(0.62, 0.75, 0.92), smoothstep(0.70, 0.78, sp));
-        col *= 0.96 + 0.08 * noise3(lp * 30.0);
+        col = vec3(0.58, 0.60, 0.65);
+        float ea = atan(lp.z, lp.x) / 6.2831853 * 14.0;
+        float er = lp.y * 5.5;
+        float erow = floor(er);
+        vec2 ef = vec2(fract(ea + mod(erow, 2.0) * 0.5) - 0.5, fract(er));
+        float ed = length(vec2(ef.x, (1.0 - ef.y) * 0.9 + 0.05));
+        col *= (0.84 + 0.22 * smoothstep(0.5, 0.0, ed)) * (1.0 - 0.25 * smoothstep(0.08, 0.0, abs(ed - 0.5)));
+        float vn = noise3(lp * 2.6 + 7.3);
+        float vein = smoothstep(0.03, 0.0, abs(vn - 0.5)) + 0.6 * smoothstep(0.02, 0.0, abs(noise3(lp * 4.1 + 1.7) - 0.5));
+        col = mix(col, vec3(0.25, 0.75, 1.0), clamp(vein, 0.0, 1.0) * (0.75 + 0.25 * sin(uTime * 2.0)));
         float ang = atan(lp.z, lp.x);
         float zz = 0.18 + 0.08 * abs(fract(ang * 3.0 / 3.14159) * 2.0 - 1.0);
         float crackMask = step(abs(ang), vCol.x * 3.3);
-        col = mix(col, vec3(0.25, 0.28, 0.36), smoothstep(0.045, 0.0, abs(lp.y - zz)) * crackMask * step(0.01, vCol.x));
+        col = mix(col, vec3(0.55, 0.9, 1.0), smoothstep(0.05, 0.0, abs(lp.y - zz)) * crackMask * step(0.01, vCol.x));
         col += vec3(0.5, 0.7, 1.0) * pow(1.0 - max(dot(n, v), 0.0), 2.0) * vCol.y * 0.5;
         spec = 0.5; shin = 40.0;
     } else if (mat > 5.5 && mat < 6.5) {
@@ -222,15 +229,25 @@ void main() { oColor = vec4(1.0); }
 
     const val BG_VS = """#version 300 es
 layout(location=0) in vec2 aPos;
+uniform vec4 uRect;
+uniform vec4 uUv;
 out vec2 vUv;
-void main() { vUv = vec2(aPos.x * 0.5 + 0.5, 0.5 - aPos.y * 0.5); gl_Position = vec4(aPos, 0.999, 1.0); }
+void main() {
+    vUv = mix(uUv.xy, uUv.zw, aPos);
+    gl_Position = vec4(mix(uRect.xy, uRect.zw, aPos), 0.0, 1.0);
+}
 """
 
     const val BG_FS = """#version 300 es
 precision mediump float;
 in vec2 vUv;
 uniform sampler2D uTex;
+uniform vec3 uTint;
+uniform float uAlpha;
 out vec4 oColor;
-void main() { oColor = vec4(texture(uTex, vUv).rgb, 1.0); }
+void main() {
+    vec4 c = texture(uTex, vUv);
+    oColor = vec4(c.rgb * uTint, c.a) * uAlpha;
+}
 """
 }

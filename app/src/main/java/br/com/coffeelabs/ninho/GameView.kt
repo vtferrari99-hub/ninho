@@ -67,6 +67,9 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
     private var frost: Bitmap? = null
     private var bgKey = -1
     private var bgBusy = false
+    private var layers: Array<Bitmap>? = null
+    private var tiltRaw = 0f
+    private var tilt = 0f
 
     // ---------------------------------------------------------------- tempo
     private var running = false
@@ -271,27 +274,23 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
     // ---------------------------------------------------------------- fundo
     private fun ensureBackground() {
         if (vw <= 0f || bgBusy) return
-        val key = (hour * 6f).toInt()
+        val key = (night * 8f).toInt()
         if (key == bgKey) return
         bgBusy = true
-        val k = min(1f, 1080f / vw)
-        val bw = (vw * k).toInt(); val bh = (vh * k).toInt()
-        val hr = hour; val dens = dp * k
+        val nt = night; val w = vw; val h = vh
         Thread {
             try {
-                val bmp = FujiPainter.paint(bw, bh, hr, dens)
-                val fr = FujiPainter.frosted(bmp)
-                post {
-                    synchronized(scene.lock) { scene.bg = bmp; scene.bgVersion++ }
-                    frost = fr
-                    bgKey = key
-                    bgBusy = false
-                }
+                val ls = layers ?: Backdrop.load(context.assets).also { layers = it }
+                val fr = Backdrop.frosted(ls, w, h, nt)
+                post { frost = fr; bgKey = key; bgBusy = false }
             } catch (e: Throwable) {
                 post { bgBusy = false; bgKey = key }
             }
         }.start()
     }
+
+    /** Inclinação lateral do aparelho (aceleração em x, m/s²), vinda do sensor. */
+    fun setTilt(ax: Float) { tiltRaw = ax }
 
     // ================================================================ atualização
     private fun update(dt: Float) {
@@ -301,11 +300,14 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
         hour = Clock.hourOf(now)
         night = SkyState.at(hour).night
         ensureBackground()
+        // paralaxe: inclinação do celular + posição do Ryu
+        val tgt = (tiltRaw / 4f).coerceIn(-1f, 1f) * 0.075f - (if (st.exists && drawnStage != Stage.EGG) swimmer.head.x * 0.02f else 0f)
+        tilt = approach(tilt, tgt, 4f, dt)
         val dark = night > 0.5f
         if (dark != darkReported) { darkReported = dark; host.onDarkSky(dark) }
         toastT -= dt
         fx.update(dt)
-        if (!st.exists) { publish(); return }
+        if (!st.exists) { synchronized(scene.lock) { scene.night = night; scene.time = t; scene.parallax = tilt }; publish(); return }
 
         st.evolvedTo?.let { startEvolve(it); st.evolvedTo = null; host.saveState() }
         if (st.missed.isNotEmpty()) {
@@ -549,7 +551,7 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
                 scene.eggGlow = max(smooth((st.progress() - 0.6f) / 0.4f) * (0.6f + 0.4f * sin(t * 2.4f)), evolveGlow())
             }
             scene.pearl = pearlOn; scene.pearlPos = pearl
-            scene.night = night; scene.time = t
+            scene.night = night; scene.time = t; scene.parallax = tilt
             scene.lookX = lookX; scene.lookY = lookY
         }
     }
@@ -591,7 +593,7 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
             performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
             if (wasEgg) {
                 val b = RyuShape.of(Stage.BABY)
-                shapeCur = RyuShape(0.5f, b.R * 0.8f, b.head * 0.8f, b.eye, b.antler, b.whisker, b.mane, b.legs)
+                shapeCur = RyuShape(0.5f, b.R * 0.8f, b.head * 0.8f, b.eye, b.antler, b.whisker, b.mane, b.legs, 0f, b.pale)
                 swimmer = Swimmer(RyuBuilder.NEST + V3(0f, 0.35f, 0f))
                 swimmer.vel = V3(0.2f, 0.6f, 0f)
                 home = V3(0f, 0.2f, 0.3f); mode = Mode.IDLE; sleepAmt = 0f
@@ -1034,7 +1036,7 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
             val nameX = sx + ss + 9f * dp
             c.drawText(st.name, nameX, hudTop + 34f * dp, txtS)
             val nameW = txtS.measureText(st.name)
-            val chip = "${st.rarity.label} · Prata"
+            val chip = "${st.rarity.label} · Grafite"
             txt.textSize = sp(11f); txt.textAlign = Paint.Align.LEFT
             val cw = txt.measureText(chip) + 16f * dp
             val cx0 = nameX + nameW + 9f * dp
@@ -1213,7 +1215,7 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
         val sleeping = st.isSleeping(now)
         val mult = st.rarity.mult.let { if (it % 1.0 == 0.0) it.toInt().toString() else it.toString() }
         c.drawText("Ryu ${st.rarity.label.lowercase()} — cresce ${mult}× mais devagar", l + pad, y, txt); y += 22f * dp
-        c.drawText("Escamas prateadas, olhos azuis", l + pad, y, txt); y += 22f * dp
+        c.drawText("Escamas grafite que prateiam com a idade, olhos azuis", l + pad, y, txt); y += 22f * dp
         c.drawText("Humor: ${st.moodLabel(sleeping)} · ${st.ageDays(now)} dia(s) de vida", l + pad, y, txt); y += 22f * dp
         c.drawText("Saciedade ${st.satiety.toInt()}% · Alegria ${st.happiness.toInt()}% · Energia ${st.energy.toInt()}%", l + pad, y, txt)
 
