@@ -25,16 +25,16 @@ class MeshDumpTest {
             val home = V3(0f, 0.3f, 0.15f)
             for (k in 0 until 420) {
                 val tt = k / 30f
-                sw.step(1f / 30f, home + V3(0.55f * sin(tt * 0.45f), 0.4f * sin(tt * 0.33f + 1f), 0.38f * sin(tt * 0.27f + 0.5f)), 0.75f, shape.L, 0.35f)
+                sw.step(1f / 30f, home + V3(0.55f * sin(tt * 0.45f), 0.4f * sin(tt * 0.33f + 1f), 0.16f * sin(tt * 0.27f + 0.5f)), 0.75f, shape.L, 0.35f)
             }
             val n = Scene.N
             val spine = FloatArray(n * 3)
             sw.spine(spine, n, shape.L)
-            for (k in 0 until n) spine[k * 3 + 2] -= 0.5f * (shape.L / 3.3f) * k / (n - 1f)
+            for (k in 0 until n) spine[k * 3 + 2] -= 0.85f * (shape.L / 3.3f) * k / (n - 1f)
             val pose = RyuPose()
             pose.t = 1f
             val v = sw.vel.norm()
-            pose.headF = V3(v.x, v.y * 0.35f, v.z).norm().lerp(V3(0f, 0.05f, 1f), 0.25f).norm()
+            pose.headF = V3(v.x, v.y * 0.35f, maxOf(v.z, 0.2f)).norm().lerp(V3(0f, 0.05f, 1f), 0.25f).norm()
             val m = Mesh()
             b.pond(m)
             b.build(m, spine, n, shape, pose)

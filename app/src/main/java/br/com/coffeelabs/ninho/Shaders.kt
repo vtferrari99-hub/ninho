@@ -55,6 +55,7 @@ uniform float uScaleK;
 uniform float uTime;
 uniform float uMirror;
 uniform float uShadowOnly;
+uniform float uBankPx;
 uniform sampler2DShadow uShadow;
 out vec4 oColor;
 
@@ -81,7 +82,8 @@ void main() {
         // plano da água: só recebe a sombra
         float sh = shadowAt(0.002);
         float fade = smoothstep(4.5, 2.0, length(vPos.xz - vec2(0.0, 0.3)));
-        oColor = vec4(0.05, 0.08, 0.16, (1.0 - sh) * 0.30 * fade);
+        float bank = smoothstep(uBankPx, uBankPx + 30.0, gl_FragCoord.y);
+        oColor = vec4(0.05, 0.08, 0.16, (1.0 - sh) * 0.30 * fade * bank);
         return;
     }
     vec3 n = normalize(vNrm);
@@ -98,7 +100,7 @@ void main() {
         float belly = smoothstep(-0.42, -0.62, cv);
         float a = u * uScaleK;
         float row = floor(a);
-        float b = vv * 14.0 + mod(row, 2.0) * 0.5;
+        float b = vv * 22.0 + mod(row, 2.0) * 0.5;
         vec2 f = vec2(fract(b) - 0.5, fract(a));
         float d = length(vec2(f.x, f.y * 0.9 + 0.05));
         float edge = smoothstep(0.10, 0.0, abs(d - 0.5)) * step(f.y, 0.62);
@@ -198,7 +200,7 @@ void main() {
     float fres = pow(1.0 - max(dot(n, v), 0.0), 4.0);
     c += uSkyCol * fres * 0.35;
     if (uMirror > 0.5) {
-        float a = 0.32 * smoothstep(2.6, 0.0, vAbove);
+        float a = 0.32 * smoothstep(2.6, 0.0, vAbove) * smoothstep(uBankPx, uBankPx + 30.0, gl_FragCoord.y);
         oColor = vec4(mix(c, uSkyCol * 0.9, 0.25), a);
         return;
     }

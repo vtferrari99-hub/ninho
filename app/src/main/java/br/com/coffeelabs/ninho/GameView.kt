@@ -349,7 +349,7 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
 
     private fun idleTarget(tt: Float): V3 {
         val k = (shapeCur.L / 3.3f).coerceIn(0.55f, 1f)
-        return clampRegion(home + V3(0.55f * k * sin(tt * 0.45f), 0.4f * k * sin(tt * 0.33f + 1f), 0.38f * k * sin(tt * 0.27f + 0.5f)))
+        return clampRegion(home + V3(0.55f * k * sin(tt * 0.45f), 0.4f * k * sin(tt * 0.33f + 1f), 0.16f * k * sin(tt * 0.27f + 0.5f)))
     }
 
     private fun stepSwim(dt: Float, target: V3, speed: Float, L: Float) {
@@ -396,7 +396,7 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
                 driftTimer -= dt
                 if (driftTimer <= 0f) {
                     driftTimer = rf(7f, 13f)
-                    home = clampRegion(V3(rf(-0.3f, 0.3f), rf(0.05f, 0.5f), rf(-0.1f, 0.35f)))
+                    home = clampRegion(V3(rf(-0.3f, 0.3f), rf(0.05f, 0.5f), rf(0.1f, 0.4f)))
                     decideIdle()
                 }
                 stepSwim(dt, idleTarget(t), 0.75f, L)
@@ -453,7 +453,7 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
         // coluna: rastro → (se dormindo) espiral sobre a folha
         swimmer.spine(trailSpine, n, L)
         val sa = smooth(sleepAmt)
-        val zPush = 0.5f * (L / 3.3f) * (1f - sa)
+        val zPush = 0.85f * (L / 3.3f) * (1f - sa)
         val minY = RyuBuilder.WATER_Y + shapeCur.R + 0.06f
         for (k in 0 until n) {
             val s = k / (n - 1f)
@@ -467,7 +467,7 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
         val along = (p0 - p3).norm()
         val v = swimmer.vel
         val dir = if (v.len() > 0.08f && sa < 0.5f) v.norm() else along
-        val hv = V3(dir.x, dir.y * 0.35f, dir.z).norm()
+        val hv = V3(dir.x, dir.y * 0.35f, max(dir.z, 0.2f)).norm()
         val att = if (touching || mode == Mode.EAT) 0.5f else if (sa > 0.5f) 0.45f else 0.25f
         attention = approach(attention, att, 3f, dt)
         var ft = hv.lerp(V3(0f, 0.05f, 1f), attention).norm()

@@ -284,7 +284,8 @@ class GLRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         val pale = shape.pale
         set3("uBelly", lerp(0.933f, 1f, pale), lerp(0.929f, 1f, pale), lerp(0.902f, 1f, pale))
         set3("uLid", lerp(0.788f, 1f, pale), lerp(0.816f, 1f, pale), lerp(0.859f, 1f, pale))
-        set1("uScaleK", 34f * shape.L / 3.3f)
+        set1("uScaleK", 54f * shape.L / 3.3f)
+        set1("uBankPx", h * 0.108f)
         set1("uTime", time)
         set1("uWaterY", RyuBuilder.WATER_Y)
         set1("uMirror", 0f)
