@@ -40,7 +40,7 @@ object Backdrop {
     }
 
     fun nightTint(night: Float): Int {
-        val r = lerp(1f, 0.30f, night); val g = lerp(1f, 0.37f, night); val b = lerp(1f, 0.68f, night)
+        val r = lerp(1f, 0.40f, night); val g = lerp(1f, 0.45f, night); val b = lerp(1f, 0.70f, night)
         return (0xFF shl 24) or ((r * 255).toInt() shl 16) or ((g * 255).toInt() shl 8) or (b * 255).toInt()
     }
 

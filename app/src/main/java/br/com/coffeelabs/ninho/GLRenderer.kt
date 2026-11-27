@@ -255,7 +255,7 @@ class GLRenderer(private val scene: Scene, private val assets: android.content.r
         GLES30.glViewport(0, 0, w, h)
         GLES30.glClearColor(0.74f, 0.82f, 0.92f, 1f)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
-        val tr = lerp(1f, 0.30f, night); val tg = lerp(1f, 0.37f, night); val tb = lerp(1f, 0.68f, night)
+        val tr = lerp(1f, 0.40f, night); val tg = lerp(1f, 0.45f, night); val tb = lerp(1f, 0.70f, night)
         val wf = w.toFloat(); val hf = h.toFloat()
         val pp = par * wf
         val shore = hf * Backdrop.SHORE
