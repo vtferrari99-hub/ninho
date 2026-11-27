@@ -11,6 +11,7 @@ import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.pow
+import kotlin.math.sign
 import kotlin.math.sin
 
 /** Conjunto de poses de cada fase, a partir dos sprites da sheet. */
@@ -50,8 +51,8 @@ class SpriteBank(am: AssetManager) {
 
     fun info(name: String): SpriteMeta.Info = info[name] ?: info.values.first()
 
-    private val MW = 14
-    private val MH = 6
+    private val MW = 22
+    private val MH = 12
     private val verts = FloatArray((MW + 1) * (MH + 1) * 2)
     private val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
     private var tintKey = -1
@@ -71,16 +72,53 @@ class SpriteBank(am: AssetManager) {
         var wavePhase = 0f
         var alpha = 1f
         var mirrorY = Float.NaN         // se definido, desenha espelhado em torno dessa linha
+        var headRot = 0f                // graus; positivo = cabeça abaixa (para a frente)
+        var tailAmp = 0f                // abano da cauda (fração da altura)
+        var tailPhase = 0f
+        var flipY = 1f                  // -1..1 (pirueta: mostra a barriga)
     }
+
+    private fun smoothstep(e0: Float, e1: Float, x: Float): Float {
+        val t = ((x - e0) / (e1 - e0)).coerceIn(0f, 1f)
+        return t * t * (3f - 2f * t)
+    }
+
+    /** Deforma um ponto do sprite (px): abano da cauda e giro da cabeça em torno do pescoço. */
+    private fun bend(l: Look, i: SpriteMeta.Info, sx0: Float, sy0: Float, out: FloatArray) {
+        var x = sx0; var y = sy0
+        val hu = i.headX / i.w
+        val span = max(hu, 1f - hu).coerceAtLeast(0.2f)
+        val d = (abs(x / i.w - hu) / span).coerceIn(0f, 1f)
+        if (l.tailAmp != 0f) {
+            val tw = smoothstep(0.45f, 1f, d)
+            y += l.tailAmp * i.h * tw * sin(l.tailPhase - d * 4f)
+            x += l.tailAmp * i.h * 0.4f * tw * cos(l.tailPhase - d * 4f)
+        }
+        if (l.headRot != 0f) {
+            val hr = 0.32f * minOf(i.w, i.h).toFloat()
+            val dh = kotlin.math.hypot(x - i.headX, y - i.headY)
+            val wgt = smoothstep(hr * 1.6f, hr * 0.7f, dh)
+            if (wgt > 0f) {
+                val pvx = i.headX + (i.w / 2f - i.headX) * 0.4f
+                val pvy = i.headY + (i.h / 2f - i.headY) * 0.4f
+                val a = Math.toRadians((l.headRot * i.face * wgt).toDouble()).toFloat()
+                val dx = x - pvx; val dy = y - pvy
+                x = pvx + dx * cos(a) - dy * sin(a); y = pvy + dx * sin(a) + dy * cos(a)
+            }
+        }
+        out[0] = x; out[1] = y
+    }
+    private val bendOut = FloatArray(2)
 
     /** Converte um ponto do sprite (px) para a tela, com as mesmas transformações (sem a onda). */
     fun toScreen(l: Look, px: Float, py: Float, out: FloatArray) {
         val i = info(l.name)
         val flip = (if (l.face == i.face) 1f else -1f) * (if (l.turn < 0f) -1f else 1f)
         val sx = l.scale * (1f + l.squash * 0.6f) * max(0.08f, abs(l.turn)) * flip
-        val sy = l.scale * (1f - l.squash) * (1f + l.breath)
-        val lx = (px - i.w / 2f) * sx
-        val ly = (py - (if (l.bottom) i.h.toFloat() else i.h / 2f)) * sy
+        val sy = l.scale * (1f - l.squash) * (1f + l.breath) * (if (abs(l.flipY) < 0.08f) 0.08f * sign(l.flipY + 1e-6f) else l.flipY)
+        bend(l, i, px, py, bendOut)
+        val lx = (bendOut[0] - i.w / 2f) * sx
+        val ly = (bendOut[1] - (if (l.bottom) i.h.toFloat() else i.h / 2f)) * sy
         val a = Math.toRadians(l.rot.toDouble()).toFloat()
         out[0] = l.x + lx * cos(a) - ly * sin(a); out[1] = l.y + lx * sin(a) + ly * cos(a)
     }
@@ -98,7 +136,8 @@ class SpriteBank(am: AssetManager) {
         val flip = (if (l.face == i.face) 1f else -1f) * (if (l.turn < 0f) -1f else 1f)
         val tAbs = max(0.08f, abs(l.turn))
         val sx = l.scale * (1f + l.squash * 0.6f) * tAbs * flip
-        val sy = l.scale * (1f - l.squash) * (1f + l.breath)
+        val fy = if (abs(l.flipY) < 0.08f) 0.08f * sign(l.flipY + 1e-6f) else l.flipY
+        val sy = l.scale * (1f - l.squash) * (1f + l.breath) * fy
         val a = Math.toRadians(l.rot.toDouble()).toFloat()
         val ca = cos(a); val sa = sin(a)
         val hu = i.headX / i.w
@@ -113,8 +152,9 @@ class SpriteBank(am: AssetManager) {
                 val w = l.wave * i.h * d.pow(1.2f) * sin(2f * PI.toFloat() * d * 1.15f - l.wavePhase)
                 // pés/base mais firmes que o topo nos que andam
                 val anchorK = if (l.bottom) (1f - v * 0.85f) else 1f
-                var lx = (u * i.w - i.w / 2f) * sx
-                var ly = (v * i.h - baseY + w * anchorK) * sy
+                bend(l, i, u * i.w, v * i.h + w * anchorK, bendOut)
+                var lx = (bendOut[0] - i.w / 2f) * sx
+                var ly = (bendOut[1] - baseY) * sy
                 val rx = lx * ca - ly * sa; val ry = lx * sa + ly * ca
                 lx = rx; ly = ry
                 verts[k++] = l.x + lx

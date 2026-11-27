@@ -124,6 +124,26 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
     private var headPx = 40f
     private var placed = false
 
+    // ---------------------------------------------------------------- truques e gestos
+    private enum class Act { NONE, LOOK, STRETCH, WAG, SNIFF, DANCE, SPIN, YAWN, SHAKE, NUZZLE, LOOP, ROLL, DIVE, ROAR, DASH, SPIRAL }
+    private var act = Act.NONE
+    private var actT = 0f
+    private var actDur = 1f
+    private var actStep = 0
+    private var actBaseX = 0f
+    private var actBaseY = 0f
+    private var headRot = 0f
+    private var tailAmp = 0f
+    private var tailPhase = 0f
+    private var tailFreq = 3f
+    private var offX = 0f
+    private var offY = 0f
+    private var extraRot = 0f
+    private var flipY = 1f
+    private var spinTurn = Float.NaN
+    private var microTimer = 4f
+    private var stepPhase = 0f
+
     // evolução
     private var evolveT = -1f
     private var evolveTarget: Stage = st.stage
@@ -405,7 +425,7 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
             if (mode != Mode.SLEEP && mode != Mode.GO_SLEEP && mode != Mode.EAT) { endPlay(false); mode = Mode.GO_SLEEP }
         } else if (mode == Mode.SLEEP || mode == Mode.GO_SLEEP) {
             mode = Mode.IDLE; driftTimer = 2f
-            setExpr(set.happy, 1.6f); hop(0.6f)
+            startAct(Act.STRETCH)
             sleepPokes = 0
             toast("${st.name} acordou! Bom dia.")
         }
@@ -421,11 +441,25 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
                     decideIdle()
                 }
                 if (set.walker) {
-                    moving = !walk(homeX, 0.1f, dt)
+                    moving = if (act == Act.SNIFF) !walk(actBaseX, 0.04f, dt)
+                    else if (act == Act.DANCE || act == Act.SPIN || act == Act.STRETCH || act == Act.YAWN) false
+                    else !walk(homeX, 0.1f, dt)
                 } else {
-                    val tx = homeX + sin(t * 0.45f) * 0.12f * vw
-                    val ty = homeY + sin(t * 0.33f + 1f) * 0.05f * vh
-                    steer(tx.coerceIn(flyX0, flyX1), ty.coerceIn(flyY0, flyY1), 0.22f, dt)
+                    when (act) {
+                        Act.DIVE -> {
+                            val p = actT / actDur
+                            val ty = if (p < 0.45f) padY - 0.07f * vh else actBaseY
+                            steer(actBaseX, ty, 0.55f, dt)
+                            if (actStep == 0 && py > padY - 0.1f * vh) { actStep = 1; splash(px, padY - 0.02f * vh) }
+                        }
+                        Act.DASH -> steer(actBaseX, actBaseY, 0.95f, dt)
+                        Act.LOOP, Act.SPIRAL, Act.ROAR -> { vx *= 0.92f; vy *= 0.92f; px += vx * dt; py += vy * dt }
+                        else -> {
+                            val tx = homeX + sin(t * 0.45f) * 0.12f * vw
+                            val ty = homeY + sin(t * 0.33f + 1f) * 0.05f * vh
+                            steer(tx.coerceIn(flyX0, flyX1), ty.coerceIn(flyY0, flyY1), 0.22f, dt)
+                        }
+                    }
                     moving = hypot(vx, vy) > 0.12f * vw
                 }
             }
@@ -453,7 +487,7 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
                 if (eatTimer <= 0f) {
                     foodMeal = null
                     mode = Mode.IDLE; driftTimer = 3f
-                    setExpr(set.happy, 1.8f); hearts(3); squashV += 3f
+                    setExpr(set.happy, 1.8f); hearts(3); squashV += 3f; startAct(if (set.walker) Act.DANCE else Act.LOOP)
                 }
             }
             Mode.PLAY -> moving = updatePlay(dt)
@@ -494,6 +528,8 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
         } + wiggle * 0.05f
         waveAmp = approach(waveAmp, waveT, 3f, dt)
         wavePhase += dt * (if (mode == Mode.SLEEP) 0.8f else 2.4f + speedN * 8f)
+
+        updateAct(dt, moving)
 
         // pose
         val want: String = when {
@@ -542,24 +578,171 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
         l.squash = squash
         l.breath = 0.012f * sin(t * 2f * pi / (if (mode == Mode.SLEEP) 4.2f else 3f))
         val bob = if (set.walker) -jumpY else sin(t * 1.6f) * 0.01f * vh
-        l.x = px + (if (wiggle > 0.01f) sin(t * 40f) * 3f * dp * wiggle else 0f)
-        l.y = py + bob
-        l.rot = if (set.walker) 0f else (vy / vh * 25f).coerceIn(-12f, 12f) * sign(face) + (if (wiggle > 0.01f) sin(t * 30f) * 4f * wiggle else 0f)
+        if (!spinTurn.isNaN()) l.turn = if (abs(spinTurn) < 0.08f) (if (spinTurn < 0f) -0.08f else 0.08f) else spinTurn
+        l.x = px + offX + (if (wiggle > 0.01f) sin(t * 40f) * 3f * dp * wiggle else 0f)
+        l.y = py + bob + offY
+        val waddle = if (set.walker && abs(vx) > 0.02f * vw && jumpY < 0.02f * vh) sin(stepPhase) * 5f else 0f
+        l.rot = (if (set.walker) waddle else (vy / vh * 25f).coerceIn(-12f, 12f) * sign(face)) + extraRot + (if (wiggle > 0.01f) sin(t * 30f) * 4f * wiggle else 0f)
+        l.headRot = headRot
+        l.tailAmp = tailAmp
+        l.tailPhase = tailPhase
+        l.flipY = flipY
         l.wave = waveAmp
         l.wavePhase = wavePhase
         l.alpha = alpha
         l.mirrorY = Float.NaN
     }
 
+    private fun startAct(a: Act) {
+        if (a == Act.NONE) return
+        if (mode == Mode.SLEEP || mode == Mode.GO_SLEEP) return
+        val flyOnly = a == Act.LOOP || a == Act.ROLL || a == Act.DIVE || a == Act.ROAR || a == Act.DASH || a == Act.SPIRAL
+        val walkOnly = a == Act.DANCE || a == Act.SPIN || a == Act.SNIFF
+        if (flyOnly && set.walker) { startAct(if (a == Act.ROAR) Act.WAG else Act.DANCE); return }
+        if (walkOnly && !set.walker) { startAct(if (a == Act.SPIN) Act.ROLL else Act.LOOP); return }
+        act = a; actT = 0f; actStep = 0
+        actBaseX = px; actBaseY = py
+        actDur = when (a) {
+            Act.LOOK -> 2.6f; Act.STRETCH -> 1.9f; Act.WAG -> 2f; Act.SNIFF -> 2.6f; Act.DANCE -> 2.6f; Act.SPIN -> 1.5f
+            Act.YAWN -> 2.2f; Act.SHAKE -> 0.9f; Act.NUZZLE -> 1.1f; Act.LOOP -> 1.9f; Act.ROLL -> 1.3f; Act.DIVE -> 3.4f
+            Act.ROAR -> 1.7f; Act.DASH -> 1.6f; Act.SPIRAL -> 2.8f; Act.NONE -> 0f
+        }
+        when (a) {
+            Act.SNIFF -> actBaseX = (px + sign(face) * 0.12f * vw).coerceIn(padX - walkRange(), padX + walkRange())
+            Act.DASH -> { actBaseX = if (px > vw / 2f) flyX0 + 0.05f * vw else flyX1 - 0.05f * vw; actBaseY = rf(flyY0, flyY1); homeX = actBaseX; homeY = actBaseY }
+            Act.ROAR -> { setExpr(set.happy, 1.7f); performHapticFeedback(HapticFeedbackConstants.LONG_PRESS) }
+            Act.DANCE -> setExpr(set.happy, 2.6f)
+            Act.LOOP, Act.SPIRAL -> { vy = 0f; setExpr(set.happy, actDur) }
+            else -> {}
+        }
+    }
+
+    /** Executa o truque atual: cabeça, cauda, giros e deslocamentos visuais. */
+    private fun updateAct(dt: Float, moving: Boolean) {
+        var hrT = 0f
+        var taT = if (mode == Mode.SLEEP) 0.012f else 0.004f
+        tailFreq = if (mode == Mode.SLEEP) 1.2f else 3f
+        var oxT = 0f; var oyT = 0f; var rotT = 0f; var fyT = 1f
+        spinTurn = Float.NaN
+        val busy = mode == Mode.EAT || mode == Mode.GO_EAT || mode == Mode.GO_SLEEP || mode == Mode.SLEEP || mode == Mode.PLAY
+        if (busy && act != Act.NONE && act != Act.WAG && act != Act.NUZZLE && act != Act.ROLL) {
+            if (act == Act.SPIRAL) py += offY
+            act = Act.NONE; offX = 0f; offY = 0f; extraRot = 0f
+        }
+        // olha para o dedo
+        if (touching && !onDragon && !diaryOpen && mode != Mode.SLEEP) {
+            val dx = lastMX - headSX; val dy = lastMY - headSY
+            hrT = Math.toDegrees(kotlin.math.atan2(dy.toDouble(), abs(dx).toDouble())).toFloat().coerceIn(-28f, 28f) * 0.7f
+            if (abs(dx) > 0.15f * vw) faceTarget = sign(dx)
+        }
+        if (mode == Mode.EAT) hrT = 14f + 12f * sin(t * 12f)
+        if (mode == Mode.SLEEP) hrT = 8f + 2f * sin(t * 1.4f)
+        if (set.walker && moving) { stepPhase += dt * 14f; taT = 0.02f; tailFreq = 9f }
+        // gestos espontâneos pequenos
+        if (act == Act.NONE && mode == Mode.IDLE) {
+            microTimer -= dt
+            if (microTimer <= 0f) {
+                microTimer = rf(3.5f, 7f)
+                startAct(listOf(Act.LOOK, Act.WAG, Act.LOOK, Act.SHAKE)[rnd.nextInt(4)])
+            }
+        }
+        if (act != Act.NONE) {
+            actT += dt
+            val p = (actT / actDur).coerceIn(0f, 1f)
+            val bell = sin(p * pi)
+            when (act) {
+                Act.LOOK -> {
+                    hrT = if (p < 0.5f) -16f * sin(p * 2f * pi) else 10f * sin((p - 0.5f) * 2f * pi)
+                    if (actStep == 0 && p > 0.5f) { actStep = 1; if (rnd.nextBoolean()) faceTarget = -faceTarget }
+                }
+                Act.STRETCH -> {
+                    squash = -0.16f * bell; squashV = 0f; hrT = -22f * bell; taT = 0.03f * bell
+                    if (actStep == 0 && p > 0.85f) { actStep = 1; wiggle = 0.5f }
+                }
+                Act.WAG -> { taT = 0.07f * bell + 0.02f; tailFreq = 15f; hrT = -6f * bell }
+                Act.SNIFF -> { hrT = 24f + 7f * sin(t * 18f); if (rnd.nextFloat() < dt * 3f) fx.spawn(Particles.PUFF, headSX + sign(face) * headPx, headSY + headPx * 0.6f, 0f, -10f * dp, 0.8f, 4f * dp, hex("#E6E9F0")) }
+                Act.DANCE -> {
+                    taT = 0.06f; tailFreq = 12f
+                    val step = (p * 6f).toInt()
+                    if (step != actStep) { actStep = step; hop(0.7f); faceTarget = -faceTarget; if (step % 2 == 0) sparkles(2) }
+                    hrT = -10f * sin(t * 10f)
+                }
+                Act.SPIN -> {
+                    spinTurn = cos(p * 2f * pi * 3f) * sign(face)
+                    if (actStep == 0) { actStep = 1; hop(0.5f) }
+                    taT = 0.05f
+                }
+                Act.YAWN -> {
+                    hrT = -26f * bell; squash = -0.08f * bell; squashV = 0f
+                    if (actStep == 0 && p > 0.6f) { actStep = 1; fx.spawn(Particles.PUFF, headSX, headSY - headPx, sign(face) * 20f * dp, -25f * dp, 1.6f, 8f * dp, hex("#DCE0EA")) }
+                }
+                Act.SHAKE -> { wiggle = max(wiggle, 0.8f * bell); taT = 0.03f; tailFreq = 18f }
+                Act.NUZZLE -> { hrT = 12f * sin(t * 14f) * bell; taT = 0.05f; tailFreq = 14f }
+                Act.LOOP -> {
+                    val r = 0.15f * vw
+                    val a = 2f * pi * smooth(p)
+                    oxT = sign(face) * r * sin(a); oyT = -r * (1f - cos(a))
+                    rotT = -sign(face) * Math.toDegrees(a.toDouble()).toFloat()
+                    taT = 0.04f
+                    if (rnd.nextFloat() < dt * 20f) fx.spawn(Particles.SPARKLE, px + offX, py + offY, 0f, 0f, 0.6f, 7f * dp, hex("#9FDBFF"), 90f)
+                }
+                Act.ROLL -> { fyT = cos(smooth(p) * 2f * pi); taT = 0.04f; oyT = -0.03f * vh * bell }
+                Act.DIVE -> taT = 0.03f
+                Act.ROAR -> {
+                    hrT = if (p < 0.3f) -24f * (p / 0.3f) else -24f + 6f * sin(t * 30f)
+                    squash = 0.06f * bell; squashV = 0f; taT = 0.05f; tailFreq = 10f
+                    if (rnd.nextFloat() < dt * 25f && p > 0.25f) {
+                        val a = rf(-0.5f, 0.5f)
+                        fx.spawn(Particles.SPARKLE, headSX + sign(face) * headPx, headSY, sign(face) * cos(a) * 220f * dp, sin(a) * 220f * dp, 0.7f, rf(6f, 12f) * dp, hex("#9FDBFF"), 200f)
+                    }
+                }
+                Act.DASH -> { squash = 0.07f * bell; squashV = 0f; taT = 0.05f }
+                Act.SPIRAL -> {
+                    val r = 0.12f * vw * (1f - p * 0.6f)
+                    val a = 2f * pi * 2f * p
+                    oxT = sign(face) * r * sin(a); oyT = -0.18f * vh * smooth(p) + r * (1f - cos(a)) * 0.4f
+                    rotT = -sign(face) * 15f * sin(a)
+                }
+                Act.NONE -> {}
+            }
+            if (actT >= actDur) {
+                if (act == Act.SPIRAL) { py += offY; homeY = py; actBaseY = py }
+                if (act == Act.LOOP || act == Act.SPIRAL) { offX = 0f; offY = 0f; extraRot = 0f; actT = 0f }
+                act = Act.NONE
+            }
+        }
+        headRot = approach(headRot, hrT, 10f, dt)
+        tailAmp = approach(tailAmp, taT, 6f, dt)
+        tailPhase += dt * tailFreq * 2f * pi / 3f
+        if (act == Act.LOOP || act == Act.SPIRAL) { offX = oxT; offY = oyT; extraRot = rotT }
+        else if (abs(extraRot) > 180f) extraRot = 0f
+        else { offX = approach(offX, oxT, 8f, dt); offY = approach(offY, oyT, 8f, dt); extraRot = approach(extraRot, rotT, 8f, dt) }
+        flipY = if (act == Act.ROLL) fyT else approach(flipY, 1f, 10f, dt)
+    }
+
+    private fun splash(x: Float, y: Float) {
+        fx.spawn(Particles.RIPPLE, x, y, 0f, 0f, 1.2f, 60f * dp, 0xFFFFFFFF.toInt())
+        fx.spawn(Particles.RIPPLE, x, y, 0f, 0f, 1.6f, 90f * dp, 0xFFFFFFFF.toInt())
+        for (i in 0 until 14) {
+            val a = rf(-pi * 0.9f, -pi * 0.1f)
+            fx.spawn(Particles.CRUMB, x + rf(-30f, 30f) * dp, y, cos(a) * rf(80f, 220f) * dp, sin(a) * rf(250f, 520f) * dp, 1.0f, rf(2f, 4f) * dp, hex("#CDEBFF"))
+        }
+        performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+    }
+
     private fun decideIdle() {
         val r = rnd.nextFloat()
         val m = st.mood()
-        when {
-            st.energy < 18f && r < 0.6f -> { fx.spawn(Particles.PUFF, headSX, headSY - headPx, 0f, -20f * dp, 2f, 9f * dp, hex("#C9CEDD")) }
-            r < 0.3f && m > 62f -> { hop(0.8f); setExpr(set.happy, 1.2f); sparkles(4) }
-            r < 0.5f && m < 38f -> fx.spawn(Particles.PUFF, headSX, headSY - headPx * 1.2f, 0f, -20f * dp, 2f, 9f * dp, hex("#C9CEDD"))
-            else -> {}
+        val w = set.walker
+        val a: Act = when {
+            st.energy < 25f -> if (r < 0.6f) Act.YAWN else Act.STRETCH
+            m < 38f -> { fx.spawn(Particles.PUFF, headSX, headSY - headPx * 1.2f, 0f, -20f * dp, 2f, 9f * dp, hex("#C9CEDD")); Act.LOOK }
+            m > 62f -> if (w) listOf(Act.DANCE, Act.WAG, Act.SPIN, Act.LOOK, Act.SNIFF)[rnd.nextInt(5)]
+                       else listOf(Act.LOOP, Act.ROLL, Act.SPIRAL, Act.ROAR, Act.DIVE, Act.DASH)[rnd.nextInt(6)]
+            else -> if (w) listOf(Act.LOOK, Act.SNIFF, Act.STRETCH, Act.WAG, Act.SHAKE)[rnd.nextInt(5)]
+                    else listOf(Act.LOOK, Act.DIVE, Act.DASH, Act.WAG, Act.ROLL)[rnd.nextInt(5)]
         }
+        startAct(a)
     }
 
     private fun setExpr(pose: String, dur: Float) { exprPose = pose; exprTimer = dur }
@@ -776,10 +959,12 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
             return
         }
         if (t - lastTapT < 0.32f) {
-            hop(1f); sparkles(5); setExpr(set.happy, 1f)
+            sparkles(5); setExpr(set.happy, 1f)
+            startAct(if (set.walker) (if (rnd.nextBoolean()) Act.DANCE else Act.SPIN) else (if (rnd.nextBoolean()) Act.LOOP else Act.ROLL))
         } else {
             hearts(if (rnd.nextBoolean()) 1 else 2)
             squashV += 3f
+            startAct(Act.NUZZLE)
             if (petBudget >= 1f) { st.happiness += 1.5f; petBudget -= 1f; st.clampStats() }
         }
         lastTapT = t
@@ -805,6 +990,7 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
         if (mode == Mode.SLEEP) { hearts(1); return }
         setExpr(set.happy, 2.4f)
         squashV += 3f
+        startAct(Act.WAG); actDur = 2.6f
         fx.spawn(Particles.HEART, headSX, headSY - headPx * 1.4f, 0f, -50f * dp, 2f, 40f * dp, hex("#F2B8C6"))
         if (petBudget >= 2f) { st.happiness += 4f; petBudget -= 2f; st.clampStats() }
         performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
