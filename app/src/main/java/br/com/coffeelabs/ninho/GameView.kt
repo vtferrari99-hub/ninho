@@ -1058,9 +1058,6 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
         }
     }
 
-    private fun foodColor(): Int = when (foodMeal) {
-        Meal.BREAKFAST -> hex("#F2B8C6"); Meal.LUNCH -> hex("#E8B48F"); else -> hex("#F4F1E8")
-    }
 
 
     private fun sp(v: Float) = v * resources.displayMetrics.scaledDensity
