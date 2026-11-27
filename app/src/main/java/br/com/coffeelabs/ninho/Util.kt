@@ -19,7 +19,8 @@ fun approach(cur: Float, target: Float, rate: Float, dt: Float): Float {
     return cur + (target - cur) * k
 }
 
-fun hex(s: String): Int = Color.parseColor(s)
+/** "#RRGGBB" → cor opaca (sem depender do Android, para rodar também em testes). */
+fun hex(s: String): Int = (0xFF000000L or s.removePrefix("#").toLong(16)).toInt()
 
 fun lerpColor(a: Int, b: Int, t: Float): Int {
     val k = clamp01(t)
