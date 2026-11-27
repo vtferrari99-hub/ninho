@@ -11,8 +11,8 @@ android {
         applicationId = "br.com.coffeelabs.ninho"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-teste"
+        versionCode = 2
+        versionName = "0.2.0-teste"
     }
 
     // Chave só de teste (não é a chave de publicação da CoffeeLabs).

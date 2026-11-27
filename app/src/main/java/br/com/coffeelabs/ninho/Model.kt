@@ -24,9 +24,9 @@ enum class Rarity(val label: String, val mult: Double) {
 }
 
 enum class Meal(val label: String, val short: String, val start: Int, val end: Int, val food: String) {
-    BREAKFAST("Café da manhã", "Café", 6, 10, "frutinhas silvestres"),
-    LUNCH("Almoço", "Almoço", 11, 14, "peixinho do riacho"),
-    DINNER("Jantar", "Jantar", 18, 21, "maçã assada");
+    BREAKFAST("Café da manhã", "Café", 6, 10, "dango colorido"),
+    LUNCH("Almoço", "Almoço", 11, 14, "peixinho grelhado"),
+    DINNER("Jantar", "Jantar", 18, 21, "onigiri");
 }
 
 object Clock {

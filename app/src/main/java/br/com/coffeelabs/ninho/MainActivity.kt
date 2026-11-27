@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.pm.PackageManager
+import android.opengl.GLSurfaceView
 import android.os.Build
 import android.os.Bundle
 import android.text.InputFilter
@@ -18,12 +19,23 @@ class MainActivity : Activity(), GameView.Host {
 
     private lateinit var st: DragonState
     private lateinit var game: GameView
+    private lateinit var gl: GLSurfaceView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         st = DragonState.load(this)
-        game = GameView(this, st, this)
-        setContentView(game)
+        val scene = Scene()
+        gl = GLSurfaceView(this).apply {
+            setEGLContextClientVersion(3)
+            setEGLConfigChooser(MsaaChooser())
+            setRenderer(GLRenderer(scene))
+            renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
+        }
+        game = GameView(this, st, this, scene)
+        val root = FrameLayout(this)
+        root.addView(gl, FrameLayout.LayoutParams(-1, -1))
+        root.addView(game, FrameLayout.LayoutParams(-1, -1))
+        setContentView(root)
         setupEdgeToEdge()
         MealScheduler.ensureChannel(this)
         if (!st.exists) askName(first = true) else MealScheduler.scheduleAll(this)
@@ -67,11 +79,13 @@ class MainActivity : Activity(), GameView.Host {
 
     override fun onResume() {
         super.onResume()
+        gl.onResume()
         game.resume()
     }
 
     override fun onPause() {
         game.pause()
+        gl.onPause()
         st.save(this)
         super.onPause()
     }
@@ -83,7 +97,7 @@ class MainActivity : Activity(), GameView.Host {
     override fun askNewEgg() {
         AlertDialog.Builder(this, android.R.style.Theme_Material_Light_Dialog_Alert)
             .setTitle("Chocar um novo ovo?")
-            .setMessage("${st.name} vai seguir a vida na floresta e um novo ovo prateado aparecerá no ninho. Não dá para desfazer.")
+            .setMessage("${st.name} vai seguir a vida na floresta e um novo ovo prateado aparecerá sobre a folha. Não dá para desfazer.")
             .setNegativeButton("Cancelar", null)
             .setPositiveButton("Novo ovo") { _, _ -> askName(first = false) }
             .show()
@@ -106,7 +120,7 @@ class MainActivity : Activity(), GameView.Host {
             .setMessage("Ele brilha com reflexos azulados. Que nome você quer dar ao seu dragão?")
             .setView(box)
             .setCancelable(!first)
-            .setPositiveButton("Levar ao ninho") { _, _ ->
+            .setPositiveButton("Levar ao lago") { _, _ ->
                 val nm = input.text.toString().trim().ifEmpty { "Lumi" }
                 st.newEgg(nm, System.currentTimeMillis())
                 st.save(this)
