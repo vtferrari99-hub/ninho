@@ -22,15 +22,15 @@ class PoseSet(
     companion object {
         fun of(s: Stage): PoseSet = when (s) {
             Stage.EGG, Stage.BABY -> PoseSet("baby_sit", listOf("baby_walk", "baby_crouch"), "baby_walk", "baby_crouch", "baby_crouch_sleep",
-                listOf("baby_sit"), "baby_sit", 0.30f, walker = true, long = false)
+                listOf("baby_sit"), "baby_sit", 0.38f, walker = true, long = false)
             Stage.CHILD -> PoseSet("child_stand", listOf("child_stand", "child_hop"), "child_sparkle", "child_stand", "child_stand_sleep",
-                listOf("child_stand"), "child_stand", 0.40f, walker = true, long = false)
+                listOf("child_stand"), "child_stand", 0.48f, walker = true, long = false)
             Stage.TEEN -> PoseSet("teen_swim", listOf("teen_swim"), "teen_swim", "teen_swim", "adult_coil5_sleep",
-                listOf("teen_swim"), "teen_swim", 0.92f, walker = false, long = true, sleepScaleRef = "adult_coil5", sleepFrac = 0.5f)
+                listOf("teen_swim"), "teen_swim", 0.92f, walker = false, long = true, sleepScaleRef = "adult_coil5", sleepFrac = 0.6f)
             Stage.ADULT -> PoseSet("adult_idle", listOf("adult_open"), "adult_roar", "adult_open", "adult_coil5_sleep",
-                listOf("adult_coil1", "adult_coil3", "adult_coil4", "adult_idle"), "adult_idle", 0.62f, walker = false, long = false)
+                listOf("adult_coil1", "adult_coil3", "adult_coil4", "adult_idle"), "adult_idle", 0.70f, walker = false, long = false)
             Stage.ELDER -> PoseSet("elder_coil", listOf("elder_swim"), "elder_coil", "elder_coil", "elder_coil_sleep",
-                listOf("elder_coil"), "elder_coil", 0.62f, walker = false, long = false)
+                listOf("elder_coil"), "elder_coil", 0.68f, walker = false, long = false)
         }
     }
 }

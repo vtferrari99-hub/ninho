@@ -353,7 +353,7 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
         return if (p < 0.5f) "egg_idle" else if (p < 0.85f) "egg_wobble" else "egg_crack"
     }
 
-    private fun eggScale() = 0.36f * vw / bank.info("egg_idle").w
+    private fun eggScale() = 0.42f * vw / bank.info("egg_idle").w
 
     private fun updateEgg(dt: Float) {
         eggWobbleV += (-70f * eggWobble - 5f * eggWobbleV) * dt
@@ -952,8 +952,11 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
         val airborne = if (set.walker) jumpY else max(0f, padY - (py + inf.h * s * 0.45f))
         val k = 1f - (airborne / (vh * 0.5f)).coerceIn(0f, 0.75f)
         val sw = inf.w * s * 0.42f * k
-        ui.color = withAlpha(hex("#0B1426"), 0.28f * k)
-        c.oval(px, padY + padR * 0.05f, sw, sw * 0.16f, ui)
+        val shY = if (set.walker) groundY() + 2f * dp else padY + padR * 0.05f
+        c.save(); c.translate(px, shY); c.scale(1f, 0.18f)
+        ui.shader = RadialGradient(0f, 0f, max(1f, sw), withAlpha(hex("#0B1426"), 0.38f * k), withAlpha(hex("#0B1426"), 0f), Shader.TileMode.CLAMP)
+        ui.alpha = 255; c.drawCircle(0f, 0f, max(1f, sw), ui); ui.shader = null
+        c.restore()
         // reflexo (só quando voa, só na faixa do lago)
         if (!set.walker && mode != Mode.SLEEP) {
             c.save(); c.clipRect(0f, padY + padR * 0.12f, vw, dockTop)
