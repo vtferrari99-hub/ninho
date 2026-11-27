@@ -21,14 +21,13 @@ import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sign
 import kotlin.math.sin
-import kotlin.math.tan
-
-enum class Expr { CALM, JOY, BLISS, LOVE, NEUTRAL, SAD, SLEEP, SLEEPY, CHEW, SURPRISED, ANNOYED }
+import kotlin.math.sqrt
 
 /**
- * Camada 2D por cima do OpenGL: cuida da lógica do jogo, do toque, das partículas e do HUD,
- * e publica o estado do Ryu para o renderizador 3D.
+ * Camada 2D por cima do OpenGL: lógica do jogo, o dragão em sprites (com malha deformável),
+ * toque, partículas e HUD. O OpenGL desenha o cenário com paralaxe e as plantas do lago.
  */
 @SuppressLint("ViewConstructor")
 class GameView(ctx: Context, private val st: DragonState, private val host: Host, private val scene: Scene) : View(ctx) {
@@ -45,9 +44,9 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
     private val fx = Particles(dp)
     private val rnd = Random()
     private val pi = PI.toFloat()
-    private val n = Scene.N
+    private val bank = SpriteBank(ctx.assets)
 
-    // ---------------------------------------------------------------- layout / câmera
+    // ---------------------------------------------------------------- layout
     private var vw = 0f
     private var vh = 0f
     private var insetTop = 0f
@@ -57,13 +56,14 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
     private var dockTop = 0f
     private var dockBottom = 0f
     private val vp = FloatArray(16)
-    private val vpInv = FloatArray(16)
     private val tmp4 = FloatArray(4)
     private val out4 = FloatArray(4)
-    private var pxUnit = 100f           // pixels por unidade de mundo a 1 unidade da câmera
-    private var halfW = 1f              // meia largura visível em z = 0
+    private var padX = 0f
+    private var padY = 0f
+    private var padR = 100f
+    private var flyX0 = 0f; private var flyX1 = 0f; private var flyY0 = 0f; private var flyY1 = 0f
 
-    // fundo
+    // fundo (vidro fosco)
     private var frost: Bitmap? = null
     private var bgKey = -1
     private var bgBusy = false
@@ -79,38 +79,50 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
     private var hour = 12f
     private var night = 0f
 
-    // ---------------------------------------------------------------- Ryu
-    private var swimmer = Swimmer(V3(0f, 0.3f, 0.3f))
-    private var shapeCur: RyuShape = RyuShape.of(st.stage)
+    // ---------------------------------------------------------------- dragão (2D)
     private var drawnStage: Stage = st.stage
-    private val trailSpine = FloatArray(n * 3)
-    private val coil = FloatArray(n * 3)
-    private val spine = FloatArray(n * 3)
+    private var set = PoseSet.of(st.stage)
+    private var scale = 1f
+    private var px = 0f
+    private var py = 0f
+    private var vx = 0f
+    private var vy = 0f
+    private var face = 1f
+    private var faceTarget = 1f
+    private var jumpY = 0f
+    private var jumpV = 0f
+    private var squash = 0f
+    private var squashV = 0f
+    private var wavePhase = 0f
+    private var waveAmp = 0.03f
+    private var wiggle = 0f
     private var mode = Mode.IDLE
     private var modeTimer = 3f
-    private var home = V3(0f, 0.3f, 0.15f)
-    private var goal = V3(0f, 0.3f, 0.15f)
+    private var homeX = 0f
+    private var homeY = 0f
+    private var goalX = 0f
+    private var goalY = 0f
     private var driftTimer = 6f
-    private var headF = V3(1f, 0f, 0.3f)
-    private var attention = 0.25f
-    private var sleepAmt = 0f
-    private var sleepPokes = 0
-    private var exprOverride = Expr.CALM
+    private var stepTimer = 0f
+    private var stepFrame = 0
+    private var restTimer = 0f
+    private var restPose: String? = null
+    private var poseName = "baby_sit"
+    private var poseScale = 1f
+    private var prevPose: String? = null
+    private var prevScale = 1f
+    private var prevStage: Stage = st.stage
+    private var fade = 1f
+    private var exprPose: String? = null
     private var exprTimer = 0f
-    private var blinkTimer = 3f
-    private var blinkPhase = 0f
-    private var jaw = 0.05f
-    private var nod = 0f
-    private var nodV = 0f
-    private var wiggle = 0f
-    private var lookX = 0f
-    private var lookY = 0f
-    private var lookTX = 0f
-    private var lookTY = 0f
+    private var sleepPokes = 0
     private var zzzTimer = 0f
+    private val look = SpriteBank.Look()
+    private val tmp2 = FloatArray(2)
     private var headSX = 0f
     private var headSY = 0f
-    private var headPx = 60f
+    private var headPx = 40f
+    private var placed = false
 
     // evolução
     private var evolveT = -1f
@@ -124,14 +136,17 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
 
     // comida
     private var foodMeal: Meal? = null
-    private var foodPos = V3.ZERO
+    private var foodX = 0f
+    private var foodY = 0f
     private var foodAmt = 1f
     private var eatTimer = 0f
 
     // pérola
     private var pearlOn = false
-    private var pearl = V3.ZERO
-    private var pearlV = V3.ZERO
+    private var pearlX = 0f
+    private var pearlY = 0f
+    private var pearlVX = 0f
+    private var pearlVY = 0f
     private var playTimer = 0f
     private var kickCd = 0f
 
@@ -195,12 +210,7 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
 
     init {
         isClickable = true
-        buildCoil()
-        if (st.exists && st.stage != Stage.EGG) {
-            if (st.isSleeping(System.currentTimeMillis())) {
-                swimmer.setFromSpine(coil, n); mode = Mode.SLEEP; sleepAmt = 1f
-            } else prewarm()
-        }
+        if (st.exists && st.stage != Stage.EGG && st.isSleeping(System.currentTimeMillis())) mode = Mode.SLEEP
     }
 
     // ================================================================ ciclo
@@ -211,12 +221,13 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
 
     fun onNewDragon() {
         drawnStage = st.stage
-        shapeCur = RyuShape.of(st.stage)
+        set = PoseSet.of(st.stage)
         evolveT = -1f
         mode = Mode.IDLE
         foodMeal = null; pearlOn = false
+        prevPose = null; fade = 1f
         fx.clear()
-        toast("Um ovo prateado apareceu sobre a folha.")
+        toast("Um ovo de dragão apareceu sobre a folha.")
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -232,44 +243,49 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
         dockBottom = vh - insetBottom - 10f * dp
         dockTop = dockBottom - 92f * dp
         Cam.viewProj(vw / vh, vp)
-        Matrix.invertM(vpInv, 0, vp, 0)
-        val tanH = tan(Math.toRadians(Cam.FOV / 2.0)).toFloat()
-        pxUnit = vh / (2f * tanH)
-        halfW = tanH * Cam.EYE.z * vw / vh
+        project(RyuBuilder.NEST.x, RyuBuilder.NEST.y + 0.01f, RyuBuilder.NEST.z)
+        padX = out4[0]; padY = out4[1]
+        project(RyuBuilder.NEST.x + 0.74f, RyuBuilder.NEST.y, RyuBuilder.NEST.z)
+        padR = abs(out4[0] - padX)
+        flyX0 = vw * 0.1f; flyX1 = vw * 0.9f
+        flyY0 = hudBottom + vh * 0.12f; flyY1 = padY - vh * 0.1f
+        applyStage(drawnStage)
+        if (!placed) { placeAtRest(); placed = true }
+    }
+
+    private fun project(x: Float, y: Float, z: Float) {
+        tmp4[0] = x; tmp4[1] = y; tmp4[2] = z; tmp4[3] = 1f
+        Matrix.multiplyMV(out4, 0, vp, 0, tmp4, 0)
+        val w = max(0.01f, out4[3])
+        out4[0] = (out4[0] / w * 0.5f + 0.5f) * vw
+        out4[1] = (1f - (out4[1] / w * 0.5f + 0.5f)) * vh
+    }
+
+    private fun applyStage(s: Stage) {
+        set = PoseSet.of(s)
+        val ref = bank.info(set.refName)
+        scale = set.refFrac * vw / ref.w
+    }
+
+    private fun scaleFor(name: String): Float {
+        val ss = set.sleepScaleRef
+        if (name == set.sleep && ss != null) return set.sleepFrac * vw / bank.info(ss).w
+        return scale
+    }
+
+    private fun groundY() = padY - padR * 0.04f
+
+    private fun placeAtRest() {
+        if (set.walker) { px = padX; py = groundY() } else { px = vw * 0.5f; py = (flyY0 + flyY1) * 0.5f }
+        homeX = px; homeY = py; goalX = px; goalY = py
+        if (mode == Mode.SLEEP) sleepSpot()
+    }
+
+    private fun sleepSpot() {
+        if (set.walker) { px = padX; py = groundY() } else { px = padX; py = padY - bank.info(set.sleep).h * scaleFor(set.sleep) * 0.42f }
     }
 
     private fun rf(a: Float, b: Float) = a + rnd.nextFloat() * (b - a)
-
-    /** Projeta um ponto do mundo para a tela; devolve a escala (px por unidade) naquela profundidade. */
-    private fun project(p: V3): Float {
-        tmp4[0] = p.x; tmp4[1] = p.y; tmp4[2] = p.z; tmp4[3] = 1f
-        Matrix.multiplyMV(out4, 0, vp, 0, tmp4, 0)
-        val w = max(0.01f, out4[3])
-        projX = (out4[0] / w * 0.5f + 0.5f) * vw
-        projY = (1f - (out4[1] / w * 0.5f + 0.5f)) * vh
-        return pxUnit / w
-    }
-    private var projX = 0f
-    private var projY = 0f
-
-    /** Ponto do mundo sob o toque, no plano z = zPlane. */
-    private fun unproject(sx: Float, sy: Float, zPlane: Float): V3 {
-        val nx = sx / vw * 2f - 1f; val ny = 1f - sy / vh * 2f
-        tmp4[0] = nx; tmp4[1] = ny; tmp4[2] = -1f; tmp4[3] = 1f
-        Matrix.multiplyMV(out4, 0, vpInv, 0, tmp4, 0)
-        val a = V3(out4[0] / out4[3], out4[1] / out4[3], out4[2] / out4[3])
-        tmp4[2] = 1f
-        Matrix.multiplyMV(out4, 0, vpInv, 0, tmp4, 0)
-        val b = V3(out4[0] / out4[3], out4[1] / out4[3], out4[2] / out4[3])
-        val d = b - a
-        val k = if (abs(d.z) < 1e-5f) 0f else (zPlane - a.z) / d.z
-        return a + d * k
-    }
-
-    private fun clampRegion(p: V3): V3 {
-        val mx = max(0.2f, halfW - 0.35f)
-        return V3(p.x.coerceIn(-mx, mx), p.y.coerceIn(-0.55f, 1.05f), p.z.coerceIn(-0.5f, 0.9f))
-    }
 
     // ---------------------------------------------------------------- fundo
     private fun ensureBackground() {
@@ -300,14 +316,14 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
         hour = Clock.hourOf(now)
         night = SkyState.at(hour).night
         ensureBackground()
-        // paralaxe: inclinação do celular + posição do Ryu
-        val tgt = (tiltRaw / 4f).coerceIn(-1f, 1f) * 0.075f - (if (st.exists && drawnStage != Stage.EGG) swimmer.head.x * 0.02f else 0f)
+        val tgt = (tiltRaw / 4f).coerceIn(-1f, 1f) * 0.075f - (if (st.exists && drawnStage != Stage.EGG) (px / vw - 0.5f) * 0.03f else 0f)
         tilt = approach(tilt, tgt, 4f, dt)
         val dark = night > 0.5f
         if (dark != darkReported) { darkReported = dark; host.onDarkSky(dark) }
         toastT -= dt
         fx.update(dt)
-        if (!st.exists) { synchronized(scene.lock) { scene.night = night; scene.time = t; scene.parallax = tilt }; publish(); return }
+        publish()
+        if (!st.exists) return
 
         st.evolvedTo?.let { startEvolve(it); st.evolvedTo = null; host.saveState() }
         if (st.missed.isNotEmpty()) {
@@ -320,241 +336,233 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
         updateEvolve(dt)
         petBudget = min(10f, petBudget + dt / 12f)
         if (exprTimer > 0f) exprTimer -= dt
-        blinkTimer -= dt
-        if (blinkTimer <= 0f) { blinkPhase = 0.16f; blinkTimer = rf(2.4f, 5.8f) }
-        if (blinkPhase > 0f) blinkPhase = max(0f, blinkPhase - dt)
-
         if (drawnStage == Stage.EGG) updateEgg(dt) else updateDragon(dt, now)
-        publish()
         saveTimer += dt
         if (saveTimer > 30f) { saveTimer = 0f; host.saveState() }
     }
+
+    private fun publish() {
+        synchronized(scene.lock) {
+            scene.dragon = false; scene.egg = false; scene.pearl = false
+            scene.night = night; scene.time = t; scene.parallax = tilt
+        }
+    }
+
+    private fun eggName(): String {
+        val p = st.progress()
+        return if (p < 0.5f) "egg_idle" else if (p < 0.85f) "egg_wobble" else "egg_crack"
+    }
+
+    private fun eggScale() = 0.36f * vw / bank.info("egg_idle").w
 
     private fun updateEgg(dt: Float) {
         eggWobbleV += (-70f * eggWobble - 5f * eggWobbleV) * dt
         eggWobble += eggWobbleV * dt
         val prog = st.progress()
-        if (rnd.nextFloat() < dt * (0.12f + prog * 0.9f)) eggWobbleV += rf(-1f, 1f) * (1.2f + prog * 3f)
-        val s = project(RyuBuilder.NEST + V3(0f, 0.3f, 0f))
-        headSX = projX; headSY = projY; headPx = s * 0.34f
+        if (rnd.nextFloat() < dt * (0.12f + prog * 0.9f)) eggWobbleV += rf(-1f, 1f) * (20f + prog * 60f)
+        val es = eggScale()
+        headSX = padX; headSY = padY - bank.info("egg_idle").h * es * 0.55f; headPx = bank.info("egg_idle").w * es * 0.35f
         if (touching && onEgg && moved > 10f * dp && rnd.nextFloat() < dt * 5f) {
-            fx.spawn(Particles.SPARKLE, headSX + rf(-1f, 1f) * headPx, headSY + rf(-1f, 1f) * headPx, 0f, -30f * dp, 0.9f, 9f * dp, hex("#D6E6FA"), rf(-90f, 90f))
+            fx.spawn(Particles.SPARKLE, headSX + rf(-1f, 1f) * headPx, headSY + rf(-1f, 1f) * headPx, 0f, -30f * dp, 0.9f, 9f * dp, hex("#9FDBFF"), rf(-90f, 90f))
         }
     }
 
-    private fun prewarm() {
-        // deixa o corpo já estendido ao abrir o app
-        val L = shapeCur.L
-        var k = 0
-        while (k < 360) { stepSwim(1f / 30f, idleTarget(k / 30f), 0.75f, L); k++ }
+    // ---------------------------------------------------------------- movimento
+    private fun steer(tx: Float, ty: Float, speed: Float, dt: Float): Boolean {
+        val dx = tx - px; val dy = ty - py
+        val d = hypot(dx, dy)
+        val maxV = speed * vw
+        val desX = if (d > 1f) dx / d * min(maxV, d * 2.2f) else 0f
+        val desY = if (d > 1f) dy / d * min(maxV, d * 2.2f) else 0f
+        val k = min(1f, dt * 3f)
+        vx += (desX - vx) * k; vy += (desY - vy) * k
+        px += vx * dt; py += vy * dt
+        if (abs(vx) > 0.03f * vw) faceTarget = sign(vx)
+        return d < 0.03f * vw
     }
 
-    private fun idleTarget(tt: Float): V3 {
-        val k = (shapeCur.L / 3.3f).coerceIn(0.55f, 1f)
-        return clampRegion(home + V3(0.55f * k * sin(tt * 0.45f), 0.4f * k * sin(tt * 0.33f + 1f), 0.16f * k * sin(tt * 0.27f + 0.5f)))
+    private fun walk(tx: Float, speed: Float, dt: Float): Boolean {
+        val dx = tx - px
+        if (abs(dx) < 4f * dp) { vx = 0f; return true }
+        vx = sign(dx) * min(speed * vw, abs(dx) * 3f)
+        px += vx * dt
+        faceTarget = sign(dx)
+        stepTimer -= dt
+        if (stepTimer <= 0f) { stepTimer = 0.2f; stepFrame++; squashV += 1.6f; if (jumpY <= 0f) { jumpV = 0.05f * vh; jumpY = 0.01f } }
+        return false
     }
 
-    private fun stepSwim(dt: Float, target: V3, speed: Float, L: Float) {
-        swimmer.step(dt, target, speed, L, 0.35f + wiggle * 0.8f)
-        val minY = RyuBuilder.WATER_Y + shapeCur.R + 0.12f
-        if (swimmer.head.y < minY) swimmer.head = V3(swimmer.head.x, minY, swimmer.head.z)
+    private fun hop(power: Float) {
+        if (set.walker) { if (jumpY <= 0f) { jumpV = 0.11f * vh * power; jumpY = 0.01f; squashV -= 2f } }
+        else { vy -= 0.55f * vh * power; wiggle = 0.6f }
     }
 
-    private fun buildCoil() {
-        val L = shapeCur.L
-        val c = RyuBuilder.NEST
-        val seg = L / (n - 1)
-        var ang = 1.25f
-        val y = RyuBuilder.WATER_Y + 0.03f + shapeCur.R * 0.95f
-        for (k in 0 until n) {
-            val s = k / (n - 1f)
-            val r = lerp(min(0.52f, L / 3.6f + 0.12f), 0.16f, s)
-            coil[k * 3] = c.x + cos(ang) * r
-            coil[k * 3 + 1] = y + (if (k < 6) (6 - k) * 0.012f else 0f)
-            coil[k * 3 + 2] = c.z + sin(ang) * r
-            ang -= seg / max(0.12f, r)
-        }
-    }
+    private fun walkRange() = padR * 0.75f
 
     private fun updateDragon(dt: Float, now: Long) {
         val sleepingNow = st.isSleeping(now)
-        val target = RyuShape.of(drawnStage)
-        shapeCur = shapeCur.blend(target, 1f - kotlin.math.exp(-0.9f * dt))
-        val L = shapeCur.L
         if (sleepingNow) {
             if (mode != Mode.SLEEP && mode != Mode.GO_SLEEP && mode != Mode.EAT) { endPlay(false); mode = Mode.GO_SLEEP }
         } else if (mode == Mode.SLEEP || mode == Mode.GO_SLEEP) {
-            if (mode == Mode.SLEEP) { buildCoil(); swimmer.setFromSpine(coil, n); swimmer.vel = V3(0f, 0.25f, 0f) }
-            sleepAmt = 0f
-            mode = Mode.IDLE; home = V3(0f, 0.3f, 0.15f)
-            setExpr(Expr.JOY, 1.6f)
+            mode = Mode.IDLE; driftTimer = 2f
+            setExpr(set.happy, 1.6f); hop(0.6f)
             sleepPokes = 0
             toast("${st.name} acordou! Bom dia.")
         }
-
         kickCd -= dt
+        var moving = false
         when (mode) {
             Mode.IDLE -> {
                 driftTimer -= dt
                 if (driftTimer <= 0f) {
-                    driftTimer = rf(7f, 13f)
-                    home = clampRegion(V3(rf(-0.3f, 0.3f), rf(0.05f, 0.5f), rf(0.1f, 0.4f)))
+                    driftTimer = rf(6f, 12f)
+                    if (set.walker) homeX = padX + rf(-1f, 1f) * walkRange()
+                    else { homeX = rf(flyX0 + 0.1f * vw, flyX1 - 0.1f * vw); homeY = rf(flyY0, flyY1) }
                     decideIdle()
                 }
-                stepSwim(dt, idleTarget(t), 0.75f, L)
+                if (set.walker) {
+                    moving = !walk(homeX, 0.1f, dt)
+                } else {
+                    val tx = homeX + sin(t * 0.45f) * 0.12f * vw
+                    val ty = homeY + sin(t * 0.33f + 1f) * 0.05f * vh
+                    steer(tx.coerceIn(flyX0, flyX1), ty.coerceIn(flyY0, flyY1), 0.22f, dt)
+                    moving = hypot(vx, vy) > 0.12f * vw
+                }
             }
-            Mode.GOTO -> {
-                stepSwim(dt, goal, 1.3f, L)
-                if ((swimmer.head - goal).len() < 0.2f) { mode = Mode.IDLE; home = clampRegion(goal - V3(0f, 0.1f, 0f)); driftTimer = rf(5f, 9f) }
-            }
-            Mode.FLEE -> {
-                stepSwim(dt, goal, 1.5f, L)
-                modeTimer -= dt
-                if (modeTimer <= 0f) mode = Mode.IDLE
+            Mode.GOTO, Mode.FLEE -> {
+                val arrived = if (set.walker) walk(goalX, if (mode == Mode.FLEE) 0.3f else 0.18f, dt) else steer(goalX, goalY, if (mode == Mode.FLEE) 0.7f else 0.45f, dt)
+                moving = !arrived
+                if (mode == Mode.FLEE) { modeTimer -= dt; if (modeTimer <= 0f) { mode = Mode.IDLE; homeX = px; homeY = py } }
+                else if (arrived) { mode = Mode.IDLE; homeX = px; homeY = py; driftTimer = rf(5f, 9f) }
             }
             Mode.GO_EAT -> {
-                val tg = foodPos + V3(0f, 0.3f, 0f)
-                stepSwim(dt, tg, 1.3f, L)
-                if ((swimmer.head - tg).len() < 0.22f) { mode = Mode.EAT; eatTimer = 3.4f; setExpr(Expr.SURPRISED, 0.4f) }
+                bank.headScreen(look, tmp2)
+                val ox = tmp2[0] - px; val oy = tmp2[1] - py
+                val arrived = if (set.walker) walk(foodX - ox * 0.9f, 0.18f, dt) else steer(foodX - ox, foodY - oy - 0.02f * vh, 0.4f, dt)
+                moving = !arrived
+                if (arrived || hypot(tmp2[0] - foodX, tmp2[1] - foodY) < 0.06f * vw) { mode = Mode.EAT; eatTimer = 3.4f; faceTarget = if (foodX >= px) 1f else -1f }
             }
             Mode.EAT -> {
-                stepSwim(dt, foodPos + V3(sin(t * 3f) * 0.05f, 0.24f + 0.04f * sin(t * 9f), 0f), 0.5f, L)
+                vx *= 0.9f; vy *= 0.9f
                 eatTimer -= dt
                 foodAmt = clamp01(eatTimer / 3f)
+                if (sin(t * 12f) > 0.85f) squashV += 0.6f
                 if (rnd.nextFloat() < dt * 8f) {
-                    val s = project(foodPos)
-                    fx.spawn(Particles.CRUMB, projX + rf(-0.1f, 0.1f) * s, projY - 0.08f * s, rf(-60f, 60f) * dp, rf(-220f, -120f) * dp, 0.7f, rf(1.5f, 3f) * dp, foodColor())
+                    fx.spawn(Particles.CRUMB, foodX + rf(-12f, 12f) * dp, foodY - 6f * dp, rf(-60f, 60f) * dp, rf(-220f, -120f) * dp, 0.7f, rf(1.5f, 3f) * dp, foodColor())
                 }
                 if (eatTimer <= 0f) {
                     foodMeal = null
-                    mode = Mode.IDLE
-                    setExpr(Expr.BLISS, 1.8f); hearts(3); nodV += 3f
+                    mode = Mode.IDLE; driftTimer = 3f
+                    setExpr(set.happy, 1.8f); hearts(3); squashV += 3f
                 }
             }
-            Mode.PLAY -> updatePlay(dt, L)
+            Mode.PLAY -> moving = updatePlay(dt)
             Mode.GO_SLEEP -> {
-                buildCoil()
-                val tg = V3(coil[0], coil[1] + 0.25f, coil[2])
-                stepSwim(dt, tg, 0.9f, L)
-                if ((swimmer.head - tg).len() < 0.25f) { mode = Mode.SLEEP; setExpr(Expr.SLEEPY, 1.2f) }
+                val sx = padX
+                val sy = if (set.walker) groundY() else padY - bank.info(set.sleep).h * scaleFor(set.sleep) * 0.42f
+                val arrived = if (set.walker) walk(sx, 0.12f, dt) else steer(sx, sy, 0.3f, dt)
+                moving = !arrived
+                if (arrived) { mode = Mode.SLEEP; vx = 0f; vy = 0f }
             }
             Mode.SLEEP -> {
-                buildCoil()
+                vx *= 0.9f; vy *= 0.9f
                 zzzTimer -= dt
-                if (zzzTimer <= 0f && sleepAmt > 0.8f) {
-                    zzzTimer = 1.7f
-                    fx.spawn(Particles.ZZZ, headSX + headPx * 0.5f, headSY - headPx, 10f * dp, -28f * dp, 2.6f, 22f * dp, hex("#E9ECF8"))
+                if (zzzTimer <= 0f) {
+                    zzzTimer = 1.8f
+                    fx.spawn(Particles.ZZZ, headSX + headPx * 0.4f, headSY - headPx * 0.8f, 10f * dp, -28f * dp, 2.6f, 22f * dp, hex("#E9ECF8"))
                 }
             }
         }
-        sleepAmt = approach(sleepAmt, if (mode == Mode.SLEEP) 1f else 0f, 1.6f, dt)
+        // limites
+        if (set.walker) { py = groundY(); px = px.coerceIn(padX - padR * 1.1f, padX + padR * 1.1f) }
+        else if (mode != Mode.SLEEP && mode != Mode.GO_SLEEP) { px = px.coerceIn(flyX0, flyX1); py = py.coerceIn(flyY0 - 0.05f * vh, flyY1 + 0.05f * vh) }
+        // pulinho dos que andam
+        if (jumpY > 0f || jumpV > 0f) {
+            jumpY += jumpV * dt; jumpV -= 0.9f * vh * dt
+            if (jumpY <= 0f) { jumpY = 0f; if (jumpV < -0.1f * vh) squashV += 2.5f; jumpV = 0f }
+        }
+        squashV += (-160f * squash - 12f * squashV) * dt
+        squash = (squash + squashV * dt).coerceIn(-0.2f, 0.2f)
+        face = approach(face, faceTarget, 8f, dt)
         wiggle = max(0f, wiggle - dt * 1.2f)
-        nodV += (-90f * nod - 9f * nodV) * dt
-        nod = (nod + nodV * dt).coerceIn(-0.5f, 0.5f)
+        val speedN = hypot(vx, vy) / vw
+        val waveT = when {
+            mode == Mode.SLEEP -> 0.006f
+            set.long -> 0.035f + speedN * 0.25f
+            set.walker -> 0.004f
+            else -> 0.015f + speedN * 0.12f
+        } + wiggle * 0.05f
+        waveAmp = approach(waveAmp, waveT, 3f, dt)
+        wavePhase += dt * (if (mode == Mode.SLEEP) 0.8f else 2.4f + speedN * 8f)
 
-        // coluna: rastro → (se dormindo) espiral sobre a folha
-        swimmer.spine(trailSpine, n, L)
-        val sa = smooth(sleepAmt)
-        val zPush = 0.85f * (L / 3.3f) * (1f - sa)
-        val minY = RyuBuilder.WATER_Y + shapeCur.R + 0.06f
-        for (k in 0 until n) {
-            val s = k / (n - 1f)
-            var x = trailSpine[k * 3]; var y = trailSpine[k * 3 + 1]; var z = trailSpine[k * 3 + 2] - zPush * s
-            if (y < minY) y = minY
-            if (sa > 0.001f) { x = lerp(x, coil[k * 3], sa); y = lerp(y, coil[k * 3 + 1], sa); z = lerp(z, coil[k * 3 + 2], sa) }
-            spine[k * 3] = x; spine[k * 3 + 1] = y; spine[k * 3 + 2] = z
+        // pose
+        val want: String = when {
+            mode == Mode.SLEEP -> set.sleep
+            exprTimer > 0f && exprPose != null -> exprPose!!
+            mode == Mode.EAT -> set.eat
+            set.walker && jumpY > 0.04f * vh && drawnStage == Stage.CHILD -> "child_jump"
+            moving -> if (set.walker) set.move[stepFrame % set.move.size] else set.move[0]
+            else -> {
+                restTimer -= dt
+                if (restTimer <= 0f) { restTimer = rf(6f, 12f); restPose = set.rest[rnd.nextInt(set.rest.size)] }
+                restPose ?: set.idle
+            }
         }
-        // orientação da cabeça
-        val p0 = V3(spine[0], spine[1], spine[2]); val p3 = V3(spine[9], spine[10], spine[11])
-        val along = (p0 - p3).norm()
-        val v = swimmer.vel
-        val dir = if (v.len() > 0.08f && sa < 0.5f) v.norm() else along
-        val hv = V3(dir.x, dir.y * 0.35f, max(dir.z, 0.2f)).norm()
-        val att = if (touching || mode == Mode.EAT) 0.5f else if (sa > 0.5f) 0.45f else 0.25f
-        attention = approach(attention, att, 3f, dt)
-        var ft = hv.lerp(V3(0f, 0.05f, 1f), attention).norm()
-        if (mode == Mode.EAT) ft = V3(ft.x, ft.y - 0.5f, ft.z).norm()
-        if (ft.dot(along) < -0.2f) ft = (ft + along * 0.6f).norm()
-        headF = headF.lerp(ft, 1f - kotlin.math.exp(-5f * dt)).norm()
-        val hs = shapeCur.head
-        val sc = project(p0 + headF * (0.22f * hs))
-        headSX = projX; headSY = projY; headPx = sc * 0.5f * hs
+        setPose(want, if (set.walker && moving) 0.05f else 0.3f)
+        if (fade < 1f) fade = min(1f, fade + dt / fadeDur)
 
-        // expressão → pose
-        val e = currentExpr()
-        val jawT = when (e) {
-            Expr.JOY -> 0.55f; Expr.LOVE -> 0.3f; Expr.BLISS -> 0.25f; Expr.SURPRISED -> 0.4f
-            Expr.CHEW -> 0.28f + 0.26f * sin(t * 13f); Expr.SLEEPY -> 0.2f + 0.2f * max(0f, sin(t * 1.5f)); else -> 0.05f
-        }
-        jaw = approach(jaw, jawT, 14f, dt)
-        lookX = approach(lookX, lookTX, 7f, dt); lookY = approach(lookY, lookTY, 7f, dt)
-        if (!touching && rnd.nextFloat() < dt * 0.25f) { lookTX = rf(-0.6f, 0.6f); lookTY = rf(-0.4f, 0.3f) }
-
-        if (touching && onDragon && moved > 10f * dp && mode != Mode.SLEEP) setExpr(Expr.LOVE, 0.35f)
+        fillLook(look, poseName, poseScale, 1f)
+        bank.headScreen(look, tmp2)
+        headSX = tmp2[0]; headSY = tmp2[1]
+        headPx = bank.info(poseName).h * poseScale * 0.16f
+        if (touching && onDragon && moved > 10f * dp && mode != Mode.SLEEP) setExpr(set.happy, 0.4f)
         if (touching && onDragon && !hugged && moved < 10f * dp && t - downT > 0.6f) { hugged = true; hug() }
+    }
+
+    private var fadeDur = 0.3f
+
+    private fun setPose(name: String, dur: Float) {
+        if (name == poseName && set === lastSet) return
+        if (!restPoseValid(name)) return
+        prevPose = poseName; prevScale = poseScale; prevStage = drawnStage
+        poseName = name; poseScale = scaleFor(name)
+        lastSet = set
+        fadeDur = max(0.01f, dur)
+        fade = if (dur <= 0.05f) 1f else 0f
+    }
+    private var lastSet: PoseSet? = null
+    private fun restPoseValid(name: String) = SpriteMeta.ALL.any { it.name == name }
+
+    private fun fillLook(l: SpriteBank.Look, name: String, sc: Float, alpha: Float) {
+        l.name = name
+        l.scale = sc
+        l.bottom = set.walker || drawnStage == Stage.EGG
+        l.face = 1
+        l.turn = if (abs(face) < 0.08f) (if (face < 0f) -0.08f else 0.08f) else face
+        l.squash = squash
+        l.breath = 0.012f * sin(t * 2f * pi / (if (mode == Mode.SLEEP) 4.2f else 3f))
+        val bob = if (set.walker) -jumpY else sin(t * 1.6f) * 0.01f * vh
+        l.x = px + (if (wiggle > 0.01f) sin(t * 40f) * 3f * dp * wiggle else 0f)
+        l.y = py + bob
+        l.rot = if (set.walker) 0f else (vy / vh * 25f).coerceIn(-12f, 12f) * sign(face) + (if (wiggle > 0.01f) sin(t * 30f) * 4f * wiggle else 0f)
+        l.wave = waveAmp
+        l.wavePhase = wavePhase
+        l.alpha = alpha
+        l.mirrorY = Float.NaN
     }
 
     private fun decideIdle() {
         val r = rnd.nextFloat()
         val m = st.mood()
         when {
-            st.energy < 18f && r < 0.6f -> setExpr(Expr.SLEEPY, 3f)
-            r < 0.3f && m > 62f -> { loop(); setExpr(Expr.JOY, 1.2f); sparkles(4) }
-            r < 0.5f && m < 38f -> {
-                setExpr(Expr.SAD, 2.5f)
-                fx.spawn(Particles.PUFF, headSX, headSY - headPx * 1.2f, 0f, -20f * dp, 2f, 9f * dp, hex("#C9CEDD"))
-            }
+            st.energy < 18f && r < 0.6f -> { fx.spawn(Particles.PUFF, headSX, headSY - headPx, 0f, -20f * dp, 2f, 9f * dp, hex("#C9CEDD")) }
+            r < 0.3f && m > 62f -> { hop(0.8f); setExpr(set.happy, 1.2f); sparkles(4) }
+            r < 0.5f && m < 38f -> fx.spawn(Particles.PUFF, headSX, headSY - headPx * 1.2f, 0f, -20f * dp, 2f, 9f * dp, hex("#C9CEDD"))
             else -> {}
         }
     }
 
-    /** "Pulinho" do Ryu: uma arrancada para cima. */
-    private fun loop() {
-        swimmer.vel = swimmer.vel + V3(rf(-0.3f, 0.3f), 1.5f, 0f)
-        wiggle = 0.6f
-    }
-
-    private fun setExpr(e: Expr, dur: Float) { exprOverride = e; exprTimer = dur }
-
-    private fun currentExpr(): Expr {
-        if (exprTimer > 0f) {
-            if (mode == Mode.SLEEP && exprOverride != Expr.ANNOYED && exprOverride != Expr.SLEEPY) return Expr.SLEEP
-            return exprOverride
-        }
-        if (mode == Mode.SLEEP && sleepAmt > 0.6f) return Expr.SLEEP
-        if (mode == Mode.EAT) return Expr.CHEW
-        if (st.energy < 18f) return Expr.SLEEPY
-        val m = st.mood()
-        return when { m > 45f -> Expr.CALM; m > 30f -> Expr.NEUTRAL; else -> Expr.SAD }
-    }
-
-    private fun publish() {
-        val e = if (st.exists && drawnStage != Stage.EGG) currentExpr() else Expr.CALM
-        var open = if (blinkPhase > 0f) 1f - sin((1f - blinkPhase / 0.16f) * pi) else 1f
-        when (e) { Expr.SLEEPY -> open *= 0.45f; Expr.ANNOYED -> open *= 0.5f; Expr.SAD -> open *= 0.75f; else -> {} }
-        val eyeMode = when (e) { Expr.SLEEP -> 2f; Expr.BLISS, Expr.LOVE -> 1f; else -> 0f }
-        synchronized(scene.lock) {
-            scene.dragon = st.exists && drawnStage != Stage.EGG
-            scene.egg = st.exists && drawnStage == Stage.EGG
-            if (scene.dragon) {
-                System.arraycopy(spine, 0, scene.spine, 0, spine.size)
-                scene.shape = shapeCur
-                val p = scene.pose
-                p.t = t; p.open = open; p.eyeMode = eyeMode; p.jaw = jaw
-                p.headF = headF; p.headU = V3.UP; p.paddle = 1f - sleepAmt; p.nod = nod
-            }
-            if (scene.egg) {
-                var wob = eggWobble
-                if (evolveT >= 0f && !evolveSwapped) wob += sin(t * 42f) * 0.16f * smooth(evolveT / swapAt())
-                scene.eggWobble = wob
-                scene.eggCrack = clamp01((st.progress() - 0.72f) / 0.28f)
-                scene.eggGlow = max(smooth((st.progress() - 0.6f) / 0.4f) * (0.6f + 0.4f * sin(t * 2.4f)), evolveGlow())
-            }
-            scene.pearl = pearlOn; scene.pearlPos = pearl
-            scene.night = night; scene.time = t; scene.parallax = tilt
-            scene.lookX = lookX; scene.lookY = lookY
-        }
-    }
+    private fun setExpr(pose: String, dur: Float) { exprPose = pose; exprTimer = dur }
 
     private fun hearts(k: Int) {
         for (i in 0 until k) {
@@ -568,7 +576,7 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
             val a = rf(0f, 2f * pi)
             fx.spawn(Particles.SPARKLE, cx + cos(a) * spread * rf(0.3f, 1f), cy + sin(a) * spread * rf(0.3f, 1f),
                 cos(a) * 40f * dp, sin(a) * 40f * dp - 20f * dp, rf(0.7f, 1.3f), rf(8f, 15f) * dp,
-                if (rnd.nextBoolean()) hex("#FFF4CF") else hex("#CFE2F7"), rf(-120f, 120f))
+                if (rnd.nextBoolean()) hex("#FFF4CF") else hex("#9FDBFF"), rf(-120f, 120f))
         }
     }
 
@@ -589,26 +597,29 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
         if (!evolveSwapped && evolveT >= swapAt()) {
             evolveSwapped = true
             val wasEgg = drawnStage == Stage.EGG
+            val wasWalker = set.walker
             drawnStage = evolveTarget
+            applyStage(drawnStage)
             performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
             if (wasEgg) {
-                val b = RyuShape.of(Stage.BABY)
-                shapeCur = RyuShape(0.5f, b.R * 0.8f, b.head * 0.8f, b.eye, b.antler, b.whisker, b.mane, b.legs, 0f, b.pale)
-                swimmer = Swimmer(RyuBuilder.NEST + V3(0f, 0.35f, 0f))
-                swimmer.vel = V3(0.2f, 0.6f, 0f)
-                home = V3(0f, 0.2f, 0.3f); mode = Mode.IDLE; sleepAmt = 0f
-                val s = project(RyuBuilder.NEST + V3(0f, 0.3f, 0f))
+                mode = Mode.IDLE; px = padX; py = groundY(); homeX = px
+                poseName = set.idle; poseScale = scale; prevPose = null; fade = 1f
                 for (i in 0 until 10) {
                     val a = rf(-pi, 0f)
-                    fx.spawn(Particles.SHELL, projX + rf(-0.15f, 0.15f) * s, projY, cos(a) * rf(120f, 260f) * dp, sin(a) * rf(250f, 420f) * dp,
-                        1.4f, rf(10f, 16f) * dp, hex("#D6DBE3"), rf(-300f, 300f))
+                    fx.spawn(Particles.SHELL, padX + rf(-30f, 30f) * dp, padY - 60f * dp, cos(a) * rf(120f, 260f) * dp, sin(a) * rf(250f, 420f) * dp,
+                        1.4f, rf(10f, 16f) * dp, hex("#8E939E"), rf(-300f, 300f))
                 }
-                sparkles(10, projX, projY, s * 0.4f)
-                setExpr(Expr.SURPRISED, 1.2f)
+                sparkles(10, padX, padY - 60f * dp, 80f * dp)
+                hop(0.8f)
                 toast("${st.name} nasceu! Bem-vindo ao lago.")
             } else {
+                if (wasWalker && !set.walker) { vy = -0.4f * vh; homeX = vw * 0.5f; homeY = (flyY0 + flyY1) * 0.5f }
+                if (!wasWalker && set.walker) py = groundY()
+                if (mode == Mode.SLEEP) sleepSpot()
+                restPose = null
+                setPose(set.happy, 0.6f)
+                setExpr(set.happy, 2f)
                 sparkles(12)
-                setExpr(Expr.JOY, 2f)
                 toast(if (drawnStage == Stage.ELDER) "${st.name} virou um ancião sábio." else "${st.name} cresceu: agora é ${drawnStage.label.lowercase()}!")
             }
         }
@@ -621,49 +632,58 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
     }
 
     // ---------------------------------------------------------------- brincar (pérola)
+    private fun pearlR() = 0.035f * vw
+
     private fun startPlay() {
         pearlOn = true
-        pearl = clampRegion(swimmer.head + V3(if (swimmer.head.x > 0f) -0.6f else 0.6f, 0.4f, 0.2f))
-        pearlV = V3(0f, 0.2f, 0f)
+        if (set.walker) { pearlX = (px + (if (px > padX) -1f else 1f) * padR * 0.6f); pearlY = groundY() - 0.2f * vh }
+        else { pearlX = if (px > vw / 2f) vw * 0.25f else vw * 0.75f; pearlY = (flyY0 + flyY1) / 2f }
+        pearlVX = 0f; pearlVY = 0f
         playTimer = 13f
         mode = Mode.PLAY
         st.energy -= 8f; st.happiness += 12f; st.clampStats()
-        setExpr(Expr.SURPRISED, 0.6f)
     }
 
     private fun endPlay(celebrate: Boolean) {
         if (!pearlOn) return
         pearlOn = false
-        if (celebrate) {
-            project(pearl); sparkles(6, projX, projY, 30f * dp)
-            setExpr(Expr.BLISS, 1.6f); hearts(2)
-            toast("Que brincadeira boa!")
-        }
-        if (mode == Mode.PLAY) mode = Mode.IDLE
+        if (celebrate) { sparkles(6, pearlX, pearlY, 30f * dp); setExpr(set.happy, 1.6f); hearts(2); toast("Que brincadeira boa!") }
+        if (mode == Mode.PLAY) { mode = Mode.IDLE; homeX = px; homeY = py }
     }
 
-    private fun updatePlay(dt: Float, L: Float) {
+    private fun updatePlay(dt: Float): Boolean {
         playTimer -= dt
-        // a pérola flutua, desacelera e quica nas bordas da área
-        pearlV = pearlV * (1f - 0.9f * dt) + V3(0f, sin(t * 1.7f) * 0.25f * dt, 0f)
-        var p = pearl + pearlV * dt
-        val c = clampRegion(p)
-        if (c.x != p.x) pearlV = V3(-pearlV.x * 0.8f, pearlV.y, pearlV.z)
-        if (c.y != p.y) pearlV = V3(pearlV.x, -pearlV.y * 0.8f, pearlV.z)
-        if (c.z != p.z) pearlV = V3(pearlV.x, pearlV.y, -pearlV.z * 0.8f)
-        p = c
-        pearl = p
-        stepSwim(dt, pearl, 1.5f, L)
-        val d = pearl - swimmer.head
-        if (kickCd <= 0f && d.len() < 0.34f) {
+        val r = pearlR()
+        if (set.walker) {
+            val gy = groundY() - r
+            pearlVY += 1.6f * vh * dt
+            pearlX += pearlVX * dt; pearlY += pearlVY * dt
+            pearlVX *= (1f - 1.2f * dt)
+            if (pearlY > gy) { pearlY = gy; pearlVY = -pearlVY * 0.5f; if (abs(pearlVY) < 0.03f * vh) pearlVY = 0f }
+            val lo = padX - padR * 1.05f; val hi = padX + padR * 1.05f
+            if (pearlX < lo) { pearlX = lo; pearlVX = abs(pearlVX) * 0.8f }
+            if (pearlX > hi) { pearlX = hi; pearlVX = -abs(pearlVX) * 0.8f }
+        } else {
+            pearlVX *= (1f - 0.9f * dt); pearlVY = pearlVY * (1f - 0.9f * dt) + sin(t * 1.7f) * 0.02f * vh * dt
+            pearlX += pearlVX * dt; pearlY += pearlVY * dt
+            if (pearlX < flyX0) { pearlX = flyX0; pearlVX = abs(pearlVX) * 0.8f }
+            if (pearlX > flyX1) { pearlX = flyX1; pearlVX = -abs(pearlVX) * 0.8f }
+            if (pearlY < flyY0) { pearlY = flyY0; pearlVY = abs(pearlVY) * 0.8f }
+            if (pearlY > flyY1) { pearlY = flyY1; pearlVY = -abs(pearlVY) * 0.8f }
+        }
+        val ox = headSX - px; val oy = headSY - py
+        val moving = if (set.walker) !walk(pearlX - ox * 0.8f, 0.22f, dt) else !steer(pearlX - ox, pearlY - oy, 0.6f, dt)
+        if (kickCd <= 0f && hypot(pearlX - headSX, pearlY - headSY) < r + headPx * 1.4f) {
             kickCd = 0.8f
-            val away = (if (d.len() > 0.01f) d.norm() else V3(1f, 0f, 0f))
-            pearlV = away * rf(1.3f, 2.0f) + V3(rf(-0.4f, 0.4f), rf(0.3f, 0.9f), rf(-0.3f, 0.3f))
-            setExpr(Expr.JOY, 0.9f)
-            project(pearl); fx.spawn(Particles.SPARKLE, projX, projY, 0f, -40f * dp, 0.6f, 12f * dp, hex("#FFF4CF"), 90f)
+            val dir = if (pearlX >= headSX) 1f else -1f
+            if (set.walker) { pearlVX = dir * rf(0.35f, 0.6f) * vw; pearlVY = -rf(0.5f, 0.9f) * vh; hop(0.5f) }
+            else { pearlVX = dir * rf(0.4f, 0.7f) * vw; pearlVY = rf(-0.3f, 0.3f) * vh }
+            setExpr(set.happy, 0.9f)
+            fx.spawn(Particles.SPARKLE, pearlX, pearlY, 0f, -40f * dp, 0.6f, 12f * dp, hex("#9FDBFF"), 90f)
             st.happiness = min(100f, st.happiness + 0.6f)
         }
         if (playTimer <= 0f) endPlay(true)
+        return moving
     }
 
     // ================================================================ toque
@@ -676,9 +696,8 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
                 lastMX = ex; lastMY = ey; lastMT = e.eventTime
                 if (diaryOpen) { onDragon = false; onEgg = false; pressedBtn = -1; return true }
                 pressedBtn = buttonAt(ex, ey)
-                onEgg = pressedBtn < 0 && st.exists && drawnStage == Stage.EGG && hypot(ex - headSX, ey - headSY) < headPx * 1.5f
+                onEgg = pressedBtn < 0 && st.exists && drawnStage == Stage.EGG && hypot(ex - headSX, ey - headSY) < headPx * 1.6f
                 onDragon = pressedBtn < 0 && st.exists && drawnStage != Stage.EGG && hitDragon(ex, ey)
-                lookAtFinger(ex, ey)
             }
             MotionEvent.ACTION_MOVE -> {
                 val d = hypot(ex - lastMX, ey - lastMY)
@@ -686,10 +705,10 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
                 moved += d
                 lastMX = ex; lastMY = ey; lastMT = e.eventTime
                 if (diaryOpen) return true
-                lookAtFinger(ex, ey)
+                if (onDragon && mode != Mode.SLEEP && abs(ex - px) > 30f * dp) faceTarget = sign(ex - px)
                 if (onEgg && moved > 10f * dp) {
                     rubAcc += d
-                    if (rubAcc > 40f * dp) { rubAcc = 0f; eggWobbleV += rf(-1f, 1f) * 1.5f; st.growthMs += 3000.0 }
+                    if (rubAcc > 40f * dp) { rubAcc = 0f; eggWobbleV += rf(-1f, 1f) * 30f; st.growthMs += 3000.0 }
                 }
                 if (onDragon && moved > 10f * dp && hitDragon(ex, ey)) rub(ex, ey, d, d / dtm)
             }
@@ -703,43 +722,33 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
                 else if (onDragon && moved < 12f * dp && !hugged && dur < 0.45f) tapDragon()
                 else if (!onDragon && !onEgg && moved < 12f * dp) tapWorld(ex, ey)
                 pressedBtn = -1; onDragon = false; onEgg = false
-                lookTX *= 0.3f; lookTY *= 0.3f
             }
             MotionEvent.ACTION_CANCEL -> { touching = false; pressedBtn = -1; onDragon = false; onEgg = false }
         }
         return true
     }
 
-    private fun lookAtFinger(px: Float, py: Float) {
-        val dx = px - headSX; val dy = py - headSY
-        val d = max(1f, hypot(dx, dy))
-        lookTX = dx / d * 0.8f
-        lookTY = -dy / d * 0.8f
+    private fun hitDragon(x: Float, y: Float): Boolean {
+        if (hypot(x - headSX, y - headSY) < headPx * 2.2f + 12f * dp) return true
+        bank.size(look, tmp2)
+        val w = tmp2[0] * 0.42f; val h = tmp2[1] * 0.42f
+        val cy = if (look.bottom) look.y - tmp2[1] / 2f else look.y
+        val a = (x - look.x) / max(1f, w); val b = (y - cy) / max(1f, h)
+        return a * a + b * b < 1f
     }
 
-    private fun hitDragon(px: Float, py: Float): Boolean {
-        if (hypot(px - headSX, py - headSY) < headPx * 1.25f + 8f * dp) return true
-        var k = 0
-        while (k < n) {
-            val s = project(V3(spine[k * 3], spine[k * 3 + 1], spine[k * 3 + 2]))
-            if (hypot(px - projX, py - projY) < s * shapeCur.R * 1.3f + 10f * dp) return true
-            k += 4
-        }
-        return false
-    }
-
-    private fun buttonAt(px: Float, py: Float): Int {
+    private fun buttonAt(x: Float, y: Float): Int {
         if (!st.exists) return -1
-        if (py < dockTop || py > dockBottom) return -1
+        if (y < dockTop || y > dockBottom) return -1
         val left = 16f * dp; val right = vw - 16f * dp
-        if (px < left || px > right) return -1
-        return ((px - left) / ((right - left) / 4f)).toInt().coerceIn(0, 3)
+        if (x < left || x > right) return -1
+        return ((x - left) / ((right - left) / 4f)).toInt().coerceIn(0, 3)
     }
 
     private fun haptic() { performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP) }
 
     private fun tapEgg() {
-        eggWobbleV += if (rnd.nextBoolean()) 2.4f else -2.4f
+        eggWobbleV += if (rnd.nextBoolean()) 60f else -60f
         st.growthMs += 15_000.0
         sparkles(3, headSX, headSY, headPx)
         haptic()
@@ -749,7 +758,7 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
     private fun tapDragon() {
         if (mode == Mode.SLEEP) {
             sleepPokes++
-            setExpr(Expr.ANNOYED, 1.3f)
+            squashV += 2f
             fx.spawn(Particles.PUFF, headSX, headSY - headPx, 0f, -18f * dp, 1.4f, 7f * dp, hex("#C9CEDD"))
             if (sleepPokes >= 3) { st.happiness -= 0.5f; st.clampStats(); toast("Shh… ${st.name} está dormindo."); sleepPokes = 0 }
             return
@@ -757,39 +766,36 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
         tapTimes.add(t)
         tapTimes.removeAll { t - it > 1.6f }
         if (tapTimes.size >= 6) {
-            setExpr(Expr.ANNOYED, 1.8f)
             st.happiness -= 1f; st.clampStats()
-            if (mode == Mode.IDLE || mode == Mode.GOTO) {
-                mode = Mode.FLEE; modeTimer = 2.5f
-                goal = clampRegion(V3(if (swimmer.head.x > 0f) -1f else 1f, 0.9f, -0.4f))
-            }
+            mode = Mode.FLEE; modeTimer = 2.5f
+            if (set.walker) goalX = padX + (if (px > padX) -1f else 1f) * walkRange()
+            else { goalX = if (px > vw / 2f) flyX0 else flyX1; goalY = flyY0 }
+            fx.spawn(Particles.PUFF, headSX, headSY - headPx, 0f, -18f * dp, 1.4f, 8f * dp, hex("#C9CEDD"))
             if (t - annoyToastT > 8f) { annoyToastT = t; toast("Ei, calma! Cutucadas demais.") }
             tapTimes.clear()
             return
         }
         if (t - lastTapT < 0.32f) {
-            loop(); sparkles(5); setExpr(Expr.JOY, 1f)
+            hop(1f); sparkles(5); setExpr(set.happy, 1f)
         } else {
             hearts(if (rnd.nextBoolean()) 1 else 2)
-            nodV += 4f
-            setExpr(Expr.BLISS, 1f)
+            squashV += 3f
             if (petBudget >= 1f) { st.happiness += 1.5f; petBudget -= 1f; st.clampStats() }
         }
         lastTapT = t
         haptic()
     }
 
-    private fun rub(px: Float, py: Float, d: Float, speed: Float) {
+    private fun rub(x: Float, y: Float, d: Float, speed: Float) {
         rubAcc += d
         if (speed > 2200f * dp) {
             wiggle = 1f
-            if (mode != Mode.SLEEP) setExpr(Expr.JOY, 0.6f)
             if (t - tickleToastT > 20f) { tickleToastT = t; toast("Hihi! Cócegas!") }
         }
         if (rubAcc > 28f * dp) {
             rubAcc = 0f
             val note = rnd.nextBoolean()
-            fx.spawn(if (note) Particles.NOTE else Particles.HEART, px + rf(-10f, 10f) * dp, py - 20f * dp, rf(-30f, 30f) * dp, -70f * dp, 1.2f,
+            fx.spawn(if (note) Particles.NOTE else Particles.HEART, x + rf(-10f, 10f) * dp, y - 20f * dp, rf(-30f, 30f) * dp, -70f * dp, 1.2f,
                 (if (note) 16f else 13f) * dp, if (note) hex("#D9D0F2") else hex("#F2B8C6"))
             if (petBudget > 0.1f) { st.happiness += 0.35f; petBudget -= 0.1f; st.clampStats() }
         }
@@ -797,21 +803,21 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
 
     private fun hug() {
         if (mode == Mode.SLEEP) { hearts(1); return }
-        setExpr(Expr.LOVE, 2.4f)
-        nodV += 3f
+        setExpr(set.happy, 2.4f)
+        squashV += 3f
         fx.spawn(Particles.HEART, headSX, headSY - headPx * 1.4f, 0f, -50f * dp, 2f, 40f * dp, hex("#F2B8C6"))
         if (petBudget >= 2f) { st.happiness += 4f; petBudget -= 2f; st.clampStats() }
         performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
     }
 
-    private fun tapWorld(px: Float, py: Float) {
+    private fun tapWorld(x: Float, y: Float) {
         if (!st.exists || drawnStage == Stage.EGG) return
-        if (py > dockTop || py < hudBottom) return
-        fx.spawn(Particles.RIPPLE, px, py, 0f, 0f, 0.8f, 26f * dp, 0xFFFFFFFF.toInt())
+        if (y > dockTop || y < hudBottom) return
+        fx.spawn(Particles.RIPPLE, x, y, 0f, 0f, 0.8f, 26f * dp, 0xFFFFFFFF.toInt())
         if (mode != Mode.IDLE && mode != Mode.GOTO) return
-        goal = clampRegion(unproject(px, py, 0.2f))
+        if (set.walker) goalX = x.coerceIn(padX - padR * 1.05f, padX + padR * 1.05f)
+        else { goalX = x.coerceIn(flyX0, flyX1); goalY = y.coerceIn(flyY0, flyY1) }
         mode = Mode.GOTO
-        setExpr(Expr.SURPRISED, 0.5f)
     }
 
     // ---------------------------------------------------------------- botões
@@ -837,8 +843,9 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
                 st.feed(m, now)
                 host.saveState()
                 foodMeal = m; foodAmt = 1f
-                val side = if (swimmer.head.x > 0f) -1f else 1f
-                foodPos = V3(side * min(0.55f, halfW - 0.45f), RyuBuilder.WATER_Y + 0.14f, 1.25f)
+                val side = if (px > padX) -1f else 1f
+                foodX = padX + side * padR * 0.62f
+                foodY = groundY() - 4f * dp
                 mode = Mode.GO_EAT
                 toast("${m.label}: ${m.food}!")
             }
@@ -852,7 +859,7 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
                 toast("${st.name} adora a pérola!")
             }
             2 -> {
-                if (egg) { toast("O ovo já está quentinho sobre a folha."); return }
+                if (egg) { toast("O ovo já está quentinho no ninho."); return }
                 if (Clock.isNight(Clock.hourOf(now))) { toast("Já é noite. Boa noite, ${st.name}!"); return }
                 if (now < st.napUntil) { st.napUntil = 0L; host.saveState(); return }
                 if (st.energy > 70f) { toast("${st.name} está sem sono agora."); return }
@@ -864,8 +871,8 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
         }
     }
 
-    private fun diaryTap(px: Float, py: Float) {
-        val hit = diaryRects.firstOrNull { it.first.contains(px, py) }?.second
+    private fun diaryTap(x: Float, y: Float) {
+        val hit = diaryRects.firstOrNull { it.first.contains(x, y) }?.second
         val now = System.currentTimeMillis()
         when (hit) {
             null, 0 -> diaryOpen = false
@@ -903,23 +910,127 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
         }
         drawAmbient(c)
         if (st.exists) {
+            if (drawnStage == Stage.EGG) drawEgg(c) else drawDragon(c)
             if (foodMeal != null) drawFood(c)
-            if (pearlOn) {
-                val s = project(pearl)
-                ui.shader = RadialGradient(projX, projY, s * 0.5f, withAlpha(hex("#FFFFFF"), 0.35f), withAlpha(hex("#FFFFFF"), 0f), Shader.TileMode.CLAMP)
-                ui.alpha = 255; c.drawCircle(projX, projY, s * 0.5f, ui); ui.shader = null
-            }
+            if (pearlOn) drawPearl(c)
         }
         fx.draw(c)
         val g = evolveGlow()
         if (g > 0.01f && st.exists) {
-            val r = headPx * 5f + 60f * dp
-            ui.shader = RadialGradient(headSX, headSY, r, intArrayOf(withAlpha(0xFFFFFFFF.toInt(), 0.9f * g), withAlpha(hex("#CFE2F7"), 0.5f * g), withAlpha(hex("#CFE2F7"), 0f)),
+            val r = headPx * 6f + 80f * dp
+            ui.shader = RadialGradient(headSX, headSY, r, intArrayOf(withAlpha(0xFFFFFFFF.toInt(), 0.9f * g), withAlpha(hex("#9FDBFF"), 0.5f * g), withAlpha(hex("#9FDBFF"), 0f)),
                 floatArrayOf(0f, 0.45f, 1f), Shader.TileMode.CLAMP)
             ui.alpha = 255; c.drawCircle(headSX, headSY, r, ui); ui.shader = null
         }
         drawHud(c)
         if (running) postInvalidateOnAnimation()
+    }
+
+    private fun drawEgg(c: Canvas) {
+        val es = eggScale()
+        val name = eggName()
+        val prog = st.progress()
+        val glow = max(smooth((prog - 0.5f) / 0.5f) * (0.5f + 0.5f * sin(t * 2.4f)), evolveGlow())
+        if (glow > 0.02f) {
+            val r = bank.info(name).w * es * 0.75f
+            ui.shader = RadialGradient(padX, padY - r * 0.6f, r, withAlpha(hex("#7FD3FF"), 0.45f * glow), withAlpha(hex("#7FD3FF"), 0f), Shader.TileMode.CLAMP)
+            ui.alpha = 255; c.drawCircle(padX, padY - r * 0.6f, r, ui); ui.shader = null
+        }
+        val l = look
+        l.name = name; l.scale = es; l.bottom = true; l.face = 1; l.turn = 1f; l.squash = 0f; l.breath = 0f
+        var wob = eggWobble
+        if (evolveT >= 0f && !evolveSwapped) wob += sin(t * 42f) * 9f * smooth(evolveT / swapAt())
+        l.rot = wob; l.wave = 0f; l.wavePhase = 0f; l.alpha = 1f; l.mirrorY = Float.NaN
+        l.x = padX; l.y = padY + bank.info(name).h * es * 0.06f
+        bank.draw(c, l, night)
+    }
+
+    private fun drawDragon(c: Canvas) {
+        val s = poseScale
+        val inf = bank.info(poseName)
+        // sombra na água / na folha
+        val airborne = if (set.walker) jumpY else max(0f, padY - (py + inf.h * s * 0.45f))
+        val k = 1f - (airborne / (vh * 0.5f)).coerceIn(0f, 0.75f)
+        val sw = inf.w * s * 0.42f * k
+        ui.color = withAlpha(hex("#0B1426"), 0.28f * k)
+        c.oval(px, padY + padR * 0.05f, sw, sw * 0.16f, ui)
+        // reflexo (só quando voa, só na faixa do lago)
+        if (!set.walker && mode != Mode.SLEEP) {
+            c.save(); c.clipRect(0f, padY + padR * 0.12f, vw, dockTop)
+            fillLook(look, poseName, s, 0.22f)
+            look.mirrorY = padY + padR * 0.1f
+            bank.draw(c, look, night)
+            c.restore()
+        }
+        val pp = prevPose
+        if (pp != null && fade < 1f) {
+            fillLook(look, pp, prevScale, 1f - fade)
+            if (prevStage != drawnStage) look.bottom = PoseSet.of(prevStage).walker
+            bank.draw(c, look, night)
+        }
+        fillLook(look, poseName, s, if (pp != null && fade < 1f) fade else 1f)
+        bank.draw(c, look, night)
+    }
+
+    private fun drawPearl(c: Canvas) {
+        val r = pearlR()
+        ui.shader = RadialGradient(pearlX, pearlY, r * 3f, withAlpha(hex("#7FD3FF"), 0.55f), withAlpha(hex("#7FD3FF"), 0f), Shader.TileMode.CLAMP)
+        ui.alpha = 255; c.drawCircle(pearlX, pearlY, r * 3f, ui)
+        ui.shader = RadialGradient(pearlX - r * 0.3f, pearlY - r * 0.3f, r * 1.2f, intArrayOf(0xFFFFFFFF.toInt(), hex("#A9E6FF"), hex("#3C8FD6")),
+            floatArrayOf(0f, 0.45f, 1f), Shader.TileMode.CLAMP)
+        c.drawCircle(pearlX, pearlY, r, ui); ui.shader = null
+        ui.color = withAlpha(0xFFFFFFFF.toInt(), 0.5f + 0.4f * sin(t * 5f))
+        c.drawCircle(pearlX - r * 0.35f, pearlY - r * 0.35f, r * 0.22f, ui)
+    }
+
+    private fun foodColor(): Int = when (foodMeal) {
+        Meal.BREAKFAST -> hex("#F2B8C6"); Meal.LUNCH -> hex("#E8B48F"); else -> hex("#F4F1E8")
+    }
+
+    private fun drawFood(c: Canvas) {
+        val m = foodMeal ?: return
+        val s = 0.13f * vw
+        val x = foodX; val y = foodY
+        fun tn(col: Int) = lerpColor(col, hex("#18244C"), night * 0.5f)
+        ui.color = withAlpha(hex("#0E1626"), 0.25f); c.oval(x, y + s * 0.1f, s * 0.75f, s * 0.14f, ui)
+        ui.color = tn(hex("#7A5A45")); c.oval(x, y, s * 0.7f, s * 0.2f, ui)
+        ui.color = tn(hex("#9A7558")); c.oval(x, y - s * 0.04f, s * 0.62f, s * 0.16f, ui)
+        val a = foodAmt
+        if (a <= 0.02f) return
+        when (m) {
+            Meal.BREAKFAST -> {
+                uiLine.color = tn(hex("#C9A97A")); uiLine.strokeWidth = s * 0.05f
+                c.drawLine(x - s * 0.5f, y - s * 0.1f, x + s * 0.5f, y - s * 0.4f, uiLine)
+                val cols = intArrayOf(hex("#F2B8C6"), hex("#F4F1E8"), hex("#B9D6A8"))
+                val k = kotlin.math.ceil(a * 3f).toInt()
+                for (i in 0 until k) {
+                    val bx = x - s * 0.28f + i * s * 0.28f; val by = y - s * 0.17f - i * s * 0.085f
+                    ui.color = tn(cols[i]); c.drawCircle(bx, by, s * 0.16f, ui)
+                    ui.color = withAlpha(0xFFFFFFFF.toInt(), 0.5f); c.drawCircle(bx - s * 0.05f, by - s * 0.06f, s * 0.04f, ui)
+                }
+            }
+            Meal.LUNCH -> {
+                val k = 0.45f + 0.55f * a
+                c.save(); c.translate(x, y - s * 0.18f); c.scale(k, k)
+                ui.color = tn(hex("#E8B48F"))
+                tmpPath.reset(); tmpPath.moveTo(s * 0.3f, 0f); tmpPath.lineTo(s * 0.52f, -s * 0.15f); tmpPath.lineTo(s * 0.52f, s * 0.15f); tmpPath.close()
+                c.drawPath(tmpPath, ui)
+                c.oval(0f, 0f, s * 0.38f, s * 0.16f, ui)
+                uiLine.color = tn(hex("#B9805F")); uiLine.strokeWidth = s * 0.03f
+                for (j in -1..1) c.drawLine(j * s * 0.12f - s * 0.03f, -s * 0.1f, j * s * 0.12f + s * 0.03f, s * 0.1f, uiLine)
+                ui.color = tn(hex("#4A4F5C")); c.drawCircle(-s * 0.24f, -s * 0.03f, s * 0.03f, ui)
+                c.restore()
+            }
+            Meal.DINNER -> {
+                val k = 0.45f + 0.55f * a
+                c.save(); c.translate(x, y - s * 0.22f); c.scale(k, k)
+                tmpPath.reset(); tmpPath.moveTo(0f, -s * 0.3f); tmpPath.quadTo(s * 0.36f, s * 0.12f, s * 0.26f, s * 0.2f)
+                tmpPath.lineTo(-s * 0.26f, s * 0.2f); tmpPath.quadTo(-s * 0.36f, s * 0.12f, 0f, -s * 0.3f); tmpPath.close()
+                ui.color = tn(hex("#F6F3EC")); c.drawPath(tmpPath, ui)
+                ui.color = tn(hex("#3A4046")); c.drawRoundRect(-s * 0.13f, s * 0.02f, s * 0.13f, s * 0.21f, s * 0.02f, s * 0.02f, ui)
+                c.restore()
+            }
+        }
     }
 
     private fun drawAmbient(c: Canvas) {
@@ -951,54 +1062,7 @@ class GameView(ctx: Context, private val st: DragonState, private val host: Host
         Meal.BREAKFAST -> hex("#F2B8C6"); Meal.LUNCH -> hex("#E8B48F"); else -> hex("#F4F1E8")
     }
 
-    private fun drawFood(c: Canvas) {
-        val m = foodMeal ?: return
-        val s = project(foodPos) * 0.42f
-        val x = projX; val y = projY
-        fun tn(col: Int) = lerpColor(col, hex("#18244C"), night * 0.5f)
-        // bandeja de madeira flutuando
-        ui.color = withAlpha(hex("#0E1626"), 0.25f); c.oval(x, y + s * 0.2f, s * 0.75f, s * 0.14f, ui)
-        ui.color = tn(hex("#7A5A45")); c.oval(x, y + s * 0.1f, s * 0.7f, s * 0.2f, ui)
-        ui.color = tn(hex("#9A7558")); c.oval(x, y + s * 0.06f, s * 0.62f, s * 0.16f, ui)
-        val a = foodAmt
-        if (a <= 0.02f) return
-        when (m) {
-            Meal.BREAKFAST -> { // dango
-                uiLine.color = tn(hex("#C9A97A")); uiLine.strokeWidth = s * 0.05f
-                c.drawLine(x - s * 0.5f, y, x + s * 0.5f, y - s * 0.3f, uiLine)
-                val cols = intArrayOf(hex("#F2B8C6"), hex("#F4F1E8"), hex("#B9D6A8"))
-                val k = kotlin.math.ceil(a * 3f).toInt()
-                for (i in 0 until k) {
-                    val bx = x - s * 0.28f + i * s * 0.28f; val by = y - s * 0.07f - i * s * 0.085f
-                    ui.color = tn(cols[i]); c.drawCircle(bx, by, s * 0.16f, ui)
-                    ui.color = withAlpha(0xFFFFFFFF.toInt(), 0.5f); c.drawCircle(bx - s * 0.05f, by - s * 0.06f, s * 0.04f, ui)
-                }
-            }
-            Meal.LUNCH -> { // peixe grelhado
-                val k = 0.45f + 0.55f * a
-                c.save(); c.translate(x, y - s * 0.08f); c.scale(k, k)
-                ui.color = tn(hex("#E8B48F"))
-                tmpPath.reset(); tmpPath.moveTo(s * 0.3f, 0f); tmpPath.lineTo(s * 0.52f, -s * 0.15f); tmpPath.lineTo(s * 0.52f, s * 0.15f); tmpPath.close()
-                c.drawPath(tmpPath, ui)
-                c.oval(0f, 0f, s * 0.38f, s * 0.16f, ui)
-                uiLine.color = tn(hex("#B9805F")); uiLine.strokeWidth = s * 0.03f
-                for (j in -1..1) c.drawLine(j * s * 0.12f - s * 0.03f, -s * 0.1f, j * s * 0.12f + s * 0.03f, s * 0.1f, uiLine)
-                ui.color = tn(hex("#4A4F5C")); c.drawCircle(-s * 0.24f, -s * 0.03f, s * 0.03f, ui)
-                c.restore()
-            }
-            Meal.DINNER -> { // onigiri
-                val k = 0.45f + 0.55f * a
-                c.save(); c.translate(x, y - s * 0.12f); c.scale(k, k)
-                tmpPath.reset(); tmpPath.moveTo(0f, -s * 0.3f); tmpPath.quadTo(s * 0.36f, s * 0.12f, s * 0.26f, s * 0.2f)
-                tmpPath.lineTo(-s * 0.26f, s * 0.2f); tmpPath.quadTo(-s * 0.36f, s * 0.12f, 0f, -s * 0.3f); tmpPath.close()
-                ui.color = tn(hex("#F6F3EC")); c.drawPath(tmpPath, ui)
-                ui.color = tn(hex("#3A4046")); c.drawRoundRect(-s * 0.13f, s * 0.02f, s * 0.13f, s * 0.21f, s * 0.02f, s * 0.02f, ui)
-                c.restore()
-            }
-        }
-    }
 
-    // ---------------------------------------------------------------- HUD (vidro fosco cinza-escuro)
     private fun sp(v: Float) = v * resources.displayMetrics.scaledDensity
 
     private fun glass(c: Canvas, l: Float, tp: Float, r: Float, b: Float, rad: Float, alpha: Float = 0.62f) {
